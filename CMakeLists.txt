@@ -46,9 +46,10 @@ option(ORB_SLAM3_WITH_TENSORRT "Enable the YOLOv8 TensorRT dynamic-scene prior" 
 if(ORB_SLAM3_WITH_TENSORRT)
     find_path(TENSORRT_INCLUDE_DIR NvInfer.h HINTS ENV TensorRT_ROOT PATH_SUFFIXES include)
     find_library(TENSORRT_LIBRARY nvinfer HINTS ENV TensorRT_ROOT PATH_SUFFIXES lib lib64)
+    find_path(CUDA_INCLUDE_DIR cuda_runtime_api.h HINTS ENV CUDA_HOME ENV CUDA_PATH PATH_SUFFIXES include)
     find_library(CUDART_LIBRARY cudart HINTS ENV CUDA_PATH ENV CUDA_HOME PATH_SUFFIXES lib lib64 lib/x64)
-    if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_LIBRARY OR NOT CUDART_LIBRARY)
-        message(FATAL_ERROR "TensorRT/CUDA not found. Set TensorRT_ROOT and CUDA_PATH, or configure with ORB_SLAM3_WITH_TENSORRT=OFF.")
+    if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_LIBRARY OR NOT CUDA_INCLUDE_DIR OR NOT CUDART_LIBRARY)
+        message(FATAL_ERROR "TensorRT/CUDA not found. Set TensorRT_ROOT and CUDA_HOME, or configure with ORB_SLAM3_WITH_TENSORRT=OFF.")
     endif()
     add_definitions(-DORB_SLAM3_USE_TENSORRT)
 endif()
@@ -63,7 +64,7 @@ ${Pangolin_INCLUDE_DIRS}
 )
 
 if(ORB_SLAM3_WITH_TENSORRT)
-include_directories(${TENSORRT_INCLUDE_DIR})
+include_directories(${TENSORRT_INCLUDE_DIR} ${CUDA_INCLUDE_DIR})
 endif()
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
@@ -98,8 +99,11 @@ src/TwoViewReconstruction.cc
 src/Config.cc
 src/Settings.cc
 src/DynamicFeatureFilter.cc
+src/YoloDetector.cc
 include/System.h
 include/Tracking.h
+include/YoloDetector.h
+include/DynamicFeatureFilter.h
 include/LocalMapping.h
 include/LoopClosing.h
 include/ORBextractor.h

@@ -7,10 +7,11 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <memory>
 #include <vector>
+#include "YoloDetector.h"
 
 namespace ORB_SLAM3 {
-
 /*
  * Front-end dynamic-feature prior.  The TensorRT engine is deliberately kept
  * behind this small interface so a normal ORB-SLAM3 build has no CUDA ABI
@@ -35,10 +36,19 @@ public:
     bool LoadTensorRTEngine(const std::string &enginePath);
     bool IsReady() const;
 
+    // Queue the newest camera frame for the detector.  The worker deliberately
+    // keeps one pending frame only, so detector overload never grows latency.
+    void SubmitImage(const cv::Mat &image) const;
+
+    // Returns the newest result with matching image dimensions. dynamicMask
+    // uses 255 for dynamic pixels; boxes belong to that same result.
+    bool GetLatestDetections(const cv::Size &imageSize, cv::Mat &dynamicMask,
+                             std::vector<YoloBoundingBox> &boxes) const;
+
     // Runs YOLOv8/TensorRT (when compiled/configured) and updates per-feature
     // dynamic probabilities. depth can be empty; then Manhattan immunity is
     // simply unavailable rather than guessed from monocular data.
-    void Evaluate(const cv::Mat &image, const cv::Mat &depth,
+    void Evaluate(const cv::Mat &dynamicMask, const cv::Mat &depth,
                   const std::vector<cv::KeyPoint> &keys,
                   const std::vector<cv::KeyPoint> *previousKeys,
                   std::vector<float> &dynamicProbability,
@@ -46,8 +56,8 @@ public:
 
 private:
     void WorkerLoop();
-    void SubmitImage(const cv::Mat &image) const;
-    bool InferDynamicMask(const cv::Mat &image, cv::Mat &mask) const;
+    bool InferDynamicMask(const cv::Mat &image, cv::Mat &mask,
+                          std::vector<YoloBoundingBox> &boxes) const;
     void ApplyManhattanImmunity(const cv::Mat &depth,
                                 const std::vector<cv::KeyPoint> &keys,
                                 std::vector<float> &probability,
@@ -59,9 +69,11 @@ private:
     mutable std::condition_variable mCondition;
     mutable cv::Mat mPendingImage;
     mutable cv::Mat mLatestMask;
+    mutable std::vector<YoloBoundingBox> mLatestBoxes;
     bool mbStopWorker;
     mutable bool mbPendingImage;
     std::thread mWorker;
+    mutable std::unique_ptr<YoloDetector> mpYoloDetector;
 };
 }
 #endif

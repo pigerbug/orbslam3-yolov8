@@ -23,6 +23,7 @@
 #include <opencv2/highgui/highgui.hpp>
 
 #include<mutex>
+#include<string>
 
 namespace ORB_SLAM3
 {
@@ -40,6 +41,7 @@ cv::Mat FrameDrawer::DrawFrame(float imageScale)
     vector<cv::KeyPoint> vIniKeys; // Initialization: KeyPoints in reference frame
     vector<int> vMatches; // Initialization: correspondeces with reference keypoints
     vector<cv::KeyPoint> vCurrentKeys; // KeyPoints in current frame
+    std::vector<YoloBoundingBox> vDynamicBoxes;
     vector<bool> vbVO, vbMap; // Tracked MapPoints in current frame
     vector<pair<cv::Point2f, cv::Point2f> > vTracks;
     int state; // Tracking state
@@ -66,6 +68,7 @@ cv::Mat FrameDrawer::DrawFrame(float imageScale)
             mState=Tracking::NO_IMAGES_YET;
 
         mIm.copyTo(im);
+        vDynamicBoxes = mvDynamicBoxes;
 
         if(mState==Tracking::NOT_INITIALIZED)
         {
@@ -108,6 +111,23 @@ cv::Mat FrameDrawer::DrawFrame(float imageScale)
 
     if(im.channels()<3) //this should be always true
         cvtColor(im,im,cv::COLOR_GRAY2BGR);
+
+    // The boxes and image are copied under the same mutex, so the Viewer never
+    // reads TensorRT worker state directly.
+    for(size_t i=0;i<vDynamicBoxes.size();++i)
+    {
+        const cv::Rect2f &box=vDynamicBoxes[i].rect;
+        cv::Rect r(cvRound(box.x/imageScale),cvRound(box.y/imageScale),
+                   cvRound(box.width/imageScale),cvRound(box.height/imageScale));
+        r &= cv::Rect(0,0,im.cols,im.rows);
+        if(r.area()>0)
+        {
+            cv::rectangle(im,r,cv::Scalar(0,0,255),2);
+            cv::putText(im,std::to_string(vDynamicBoxes[i].classId),
+                        r.tl()+cv::Point(0,-3),cv::FONT_HERSHEY_PLAIN,1.2,
+                        cv::Scalar(0,0,255),1);
+        }
+    }
 
     //Draw
     if(state==Tracking::NOT_INITIALIZED)
@@ -372,6 +392,7 @@ void FrameDrawer::Update(Tracking *pTracker)
     unique_lock<mutex> lock(mMutex);
     pTracker->mImGray.copyTo(mIm);
     mvCurrentKeys=pTracker->mCurrentFrame.mvKeys;
+    mvDynamicBoxes=pTracker->mCurrentFrame.mvDynamicBoxes;
     mThDepth = pTracker->mCurrentFrame.mThDepth;
     mvCurrentDepth = pTracker->mCurrentFrame.mvDepth;
 

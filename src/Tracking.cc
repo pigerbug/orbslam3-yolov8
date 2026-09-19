@@ -48,25 +48,34 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpAtlas(pAtlas), mnLastRelocFrameId(0), time_recently_lost(5.0),
     mnInitialFrameId(0), mbCreatedMap(false), mnFirstFrameId(0), mpCamera2(nullptr), mpLastKeyFrame(static_cast<KeyFrame*>(NULL))
 {
+    // DynamicFilter is an extension field, therefore read it from both the
+    // legacy YAML format and the File.version: 1.0 Settings format.
+    cv::FileStorage dynamicSettings(strSettingPath, cv::FileStorage::READ);
+    cv::FileNode dynamicNode = dynamicSettings["DynamicFilter"];
+    if(!dynamicNode.empty())
+    {
+        DynamicFeatureFilter::Config dynamicConfig;
+        dynamicConfig.enabled = (int)dynamicNode["enabled"] != 0;
+        if(!dynamicNode["dynamicThreshold"].empty()) dynamicConfig.dynamicThreshold = (float)dynamicNode["dynamicThreshold"];
+        if(!dynamicNode["sampsonScale"].empty()) dynamicConfig.sampsonScale = (float)dynamicNode["sampsonScale"];
+        if(!dynamicNode["planeDistance"].empty()) dynamicConfig.planeDistance = (float)dynamicNode["planeDistance"];
+        mDynamicFilter.Configure(dynamicConfig);
+        if(dynamicConfig.enabled && !dynamicNode["engine"].empty())
+        {
+            const string enginePath=(string)dynamicNode["engine"];
+            if(mDynamicFilter.LoadTensorRTEngine(enginePath))
+                cout << "YOLOv8 TensorRT engine loaded: " << enginePath << endl;
+            else
+                cerr << "YOLOv8 TensorRT engine could not be loaded: " << enginePath << endl;
+        }
+    }
+
     // Load camera parameters from settings file
     if(settings){
         newParameterLoader(settings);
     }
     else{
         cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ);
-
-        cv::FileNode dynamicNode = fSettings["DynamicFilter"];
-        if(!dynamicNode.empty())
-        {
-            DynamicFeatureFilter::Config dynamicConfig;
-            dynamicConfig.enabled = (int)dynamicNode["enabled"] != 0;
-            if(!dynamicNode["dynamicThreshold"].empty()) dynamicConfig.dynamicThreshold = (float)dynamicNode["dynamicThreshold"];
-            if(!dynamicNode["sampsonScale"].empty()) dynamicConfig.sampsonScale = (float)dynamicNode["sampsonScale"];
-            if(!dynamicNode["planeDistance"].empty()) dynamicConfig.planeDistance = (float)dynamicNode["planeDistance"];
-            mDynamicFilter.Configure(dynamicConfig);
-            if(dynamicConfig.enabled && !dynamicNode["engine"].empty())
-                mDynamicFilter.LoadTensorRTEngine((string)dynamicNode["engine"]);
-        }
 
         bool b_parse_cam = ParseCamParamFile(fSettings);
         if(!b_parse_cam)
@@ -1462,10 +1471,24 @@ bool Tracking::GetStepByStep()
     return bStepByStep;
 }
 
-void Tracking::ApplyDynamicPrior(const cv::Mat &image, const cv::Mat &depth)
+void Tracking::PrepareDynamicMask(const cv::Mat &detectionImage, cv::Mat &staticMask,
+                                  std::vector<YoloBoundingBox> &boxes)
+{
+    cv::Mat dynamicMask;
+    if(mDynamicFilter.GetLatestDetections(detectionImage.size(),dynamicMask,boxes))
+        cv::bitwise_not(dynamicMask,staticMask);
+    else
+    {
+        staticMask.release();
+        boxes.clear();
+    }
+    mDynamicFilter.SubmitImage(detectionImage);
+}
+
+void Tracking::ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth)
 {
     const std::vector<cv::KeyPoint> *previousKeys = mLastFrame.mvKeysUn.empty() ? NULL : &mLastFrame.mvKeysUn;
-    mDynamicFilter.Evaluate(image, depth, mCurrentFrame.mvKeysUn, previousKeys,
+    mDynamicFilter.Evaluate(dynamicMask, depth, mCurrentFrame.mvKeysUn, previousKeys,
                             mCurrentFrame.mvDynamicProbability, mCurrentFrame.mvbManhattanImmune);
 }
 
@@ -1508,22 +1531,28 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat 
         }
     }
 
+    cv::Mat staticMask,dynamicMask;
+    std::vector<YoloBoundingBox> dynamicBoxes;
+    PrepareDynamicMask(imRectLeft,staticMask,dynamicBoxes);
+    if(!staticMask.empty()) cv::bitwise_not(staticMask,dynamicMask);
+
     //cout << "Incoming frame creation" << endl;
 
     if (mSensor == System::STEREO && !mpCamera2)
-        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera);
+        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,NULL,IMU::Calib(),staticMask);
     else if(mSensor == System::STEREO && mpCamera2)
-        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr);
+        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr,NULL,IMU::Calib(),staticMask);
     else if(mSensor == System::IMU_STEREO && !mpCamera2)
-        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,&mLastFrame,*mpImuCalib);
+        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,&mLastFrame,*mpImuCalib,staticMask);
     else if(mSensor == System::IMU_STEREO && mpCamera2)
-        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr,&mLastFrame,*mpImuCalib);
+        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr,&mLastFrame,*mpImuCalib,staticMask);
 
     //cout << "Incoming frame ended" << endl;
 
     mCurrentFrame.mNameFile = filename;
     mCurrentFrame.mnDataset = mnNumDataset;
-    ApplyDynamicPrior(mImGray);
+    mCurrentFrame.mvDynamicBoxes = dynamicBoxes;
+    ApplyDynamicPrior(dynamicMask);
 
 #ifdef REGISTER_TIMES
     vdORBExtract_ms.push_back(mCurrentFrame.mTimeORB_Ext);
@@ -1561,10 +1590,15 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
     if((fabs(mDepthMapFactor-1.0f)>1e-5) || imDepth.type()!=CV_32F)
         imDepth.convertTo(imDepth,CV_32F,mDepthMapFactor);
 
+    cv::Mat staticMask,dynamicMask;
+    std::vector<YoloBoundingBox> dynamicBoxes;
+    PrepareDynamicMask(imRGB,staticMask,dynamicBoxes);
+    if(!staticMask.empty()) cv::bitwise_not(staticMask,dynamicMask);
+
     if (mSensor == System::RGBD)
-        mCurrentFrame = Frame(mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera);
+        mCurrentFrame = Frame(mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,NULL,IMU::Calib(),staticMask);
     else if(mSensor == System::IMU_RGBD)
-        mCurrentFrame = Frame(mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,&mLastFrame,*mpImuCalib);
+        mCurrentFrame = Frame(mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,&mLastFrame,*mpImuCalib,staticMask);
 
 
 
@@ -1573,7 +1607,8 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
 
     mCurrentFrame.mNameFile = filename;
     mCurrentFrame.mnDataset = mnNumDataset;
-    ApplyDynamicPrior(mImGray, imDepth);
+    mCurrentFrame.mvDynamicBoxes = dynamicBoxes;
+    ApplyDynamicPrior(dynamicMask, imDepth);
 
 #ifdef REGISTER_TIMES
     vdORBExtract_ms.push_back(mCurrentFrame.mTimeORB_Ext);
@@ -1603,21 +1638,26 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
             cvtColor(mImGray,mImGray,cv::COLOR_BGRA2GRAY);
     }
 
+    cv::Mat staticMask,dynamicMask;
+    std::vector<YoloBoundingBox> dynamicBoxes;
+    PrepareDynamicMask(im,staticMask,dynamicBoxes);
+    if(!staticMask.empty()) cv::bitwise_not(staticMask,dynamicMask);
+
     if (mSensor == System::MONOCULAR)
     {
         if(mState==NOT_INITIALIZED || mState==NO_IMAGES_YET ||(lastID - initID) < mMaxFrames)
-            mCurrentFrame = Frame(mImGray,timestamp,mpIniORBextractor,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth);
+            mCurrentFrame = Frame(mImGray,timestamp,mpIniORBextractor,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth,NULL,IMU::Calib(),staticMask);
         else
-            mCurrentFrame = Frame(mImGray,timestamp,mpORBextractorLeft,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth);
+            mCurrentFrame = Frame(mImGray,timestamp,mpORBextractorLeft,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth,NULL,IMU::Calib(),staticMask);
     }
     else if(mSensor == System::IMU_MONOCULAR)
     {
         if(mState==NOT_INITIALIZED || mState==NO_IMAGES_YET)
         {
-            mCurrentFrame = Frame(mImGray,timestamp,mpIniORBextractor,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth,&mLastFrame,*mpImuCalib);
+            mCurrentFrame = Frame(mImGray,timestamp,mpIniORBextractor,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth,&mLastFrame,*mpImuCalib,staticMask);
         }
         else
-            mCurrentFrame = Frame(mImGray,timestamp,mpORBextractorLeft,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth,&mLastFrame,*mpImuCalib);
+            mCurrentFrame = Frame(mImGray,timestamp,mpORBextractorLeft,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth,&mLastFrame,*mpImuCalib,staticMask);
     }
 
     if (mState==NO_IMAGES_YET)
@@ -1625,7 +1665,8 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
 
     mCurrentFrame.mNameFile = filename;
     mCurrentFrame.mnDataset = mnNumDataset;
-    ApplyDynamicPrior(mImGray);
+    mCurrentFrame.mvDynamicBoxes = dynamicBoxes;
+    ApplyDynamicPrior(dynamicMask);
 
 #ifdef REGISTER_TIMES
     vdORBExtract_ms.push_back(mCurrentFrame.mTimeORB_Ext);

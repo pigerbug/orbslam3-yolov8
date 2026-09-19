@@ -23,6 +23,7 @@
 #include "Tracking.h"
 #include "MapPoint.h"
 #include "Atlas.h"
+#include "YoloDetector.h"
 
 #include<opencv2/core/core.hpp>
 #include<opencv2/features2d/features2d.hpp>
@@ -60,6 +61,7 @@ protected:
     cv::Mat mIm, mImRight;
     int N;
     vector<cv::KeyPoint> mvCurrentKeys,mvCurrentKeysRight;
+    std::vector<YoloBoundingBox> mvDynamicBoxes;
     vector<bool> mvbMap, mvbVO;
     bool mbOnlyTracking;
     int mnTracked, mnTrackedVO;

@@ -57,6 +57,7 @@
 #include <opencv2/features2d/features2d.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <vector>
+#include <algorithm>
 #include <iostream>
 
 #include "ORBextractor.h"
@@ -1093,12 +1094,41 @@ namespace ORB_SLAM3
         Mat image = _image.getMat();
         assert(image.type() == CV_8UC1 );
 
+        Mat staticMask = _mask.empty() ? Mat() : _mask.getMat();
+        if(!staticMask.empty())
+        {
+            if(staticMask.type()!=CV_8UC1)
+                staticMask.convertTo(staticMask,CV_8U);
+            if(staticMask.size()!=image.size())
+                resize(staticMask,staticMask,image.size(),0,0,INTER_NEAREST);
+        }
+
         // Pre-compute the scale pyramid
         ComputePyramid(image);
 
         vector < vector<KeyPoint> > allKeypoints;
         ComputeKeyPointsOctTree(allKeypoints);
         //ComputeKeyPointsOld(allKeypoints);
+
+        // FAST does not take a mask in this implementation.  Filter its
+        // candidates before descriptor generation; at this point pyramid
+        // keypoint coordinates can be mapped back to the input mask exactly.
+        if(!staticMask.empty())
+        {
+            for(int level=0; level<nlevels; ++level)
+            {
+                const float scale = mvScaleFactor[level];
+                vector<KeyPoint> &keys = allKeypoints[level];
+                keys.erase(std::remove_if(keys.begin(),keys.end(),
+                    [&staticMask,scale](const KeyPoint &kp)
+                    {
+                        const int x=cvRound(kp.pt.x*scale);
+                        const int y=cvRound(kp.pt.y*scale);
+                        return x<0 || y<0 || x>=staticMask.cols || y>=staticMask.rows ||
+                               staticMask.at<unsigned char>(y,x)==0;
+                    }),keys.end());
+            }
+        }
 
         Mat descriptors;
 
