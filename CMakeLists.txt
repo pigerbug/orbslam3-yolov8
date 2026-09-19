@@ -42,6 +42,17 @@ find_package(Eigen3 3.1.0 REQUIRED)
 find_package(Pangolin REQUIRED)
 find_package(realsense2)
 
+option(ORB_SLAM3_WITH_TENSORRT "Enable the YOLOv8 TensorRT dynamic-scene prior" OFF)
+if(ORB_SLAM3_WITH_TENSORRT)
+    find_path(TENSORRT_INCLUDE_DIR NvInfer.h HINTS ENV TensorRT_ROOT PATH_SUFFIXES include)
+    find_library(TENSORRT_LIBRARY nvinfer HINTS ENV TensorRT_ROOT PATH_SUFFIXES lib lib64)
+    find_library(CUDART_LIBRARY cudart HINTS ENV CUDA_PATH ENV CUDA_HOME PATH_SUFFIXES lib lib64 lib/x64)
+    if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_LIBRARY OR NOT CUDART_LIBRARY)
+        message(FATAL_ERROR "TensorRT/CUDA not found. Set TensorRT_ROOT and CUDA_PATH, or configure with ORB_SLAM3_WITH_TENSORRT=OFF.")
+    endif()
+    add_definitions(-DORB_SLAM3_USE_TENSORRT)
+endif()
+
 include_directories(
 ${PROJECT_SOURCE_DIR}
 ${PROJECT_SOURCE_DIR}/include
@@ -50,6 +61,10 @@ ${PROJECT_SOURCE_DIR}/Thirdparty/Sophus
 ${EIGEN3_INCLUDE_DIR}
 ${Pangolin_INCLUDE_DIRS}
 )
+
+if(ORB_SLAM3_WITH_TENSORRT)
+include_directories(${TENSORRT_INCLUDE_DIR})
+endif()
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 
@@ -82,6 +97,7 @@ src/GeometricTools.cc
 src/TwoViewReconstruction.cc
 src/Config.cc
 src/Settings.cc
+src/DynamicFeatureFilter.cc
 include/System.h
 include/Tracking.h
 include/LocalMapping.h
@@ -124,6 +140,10 @@ ${PROJECT_SOURCE_DIR}/Thirdparty/g2o/lib/libg2o.so
 -lboost_serialization
 -lcrypto
 )
+
+if(ORB_SLAM3_WITH_TENSORRT)
+target_link_libraries(${PROJECT_NAME} ${TENSORRT_LIBRARY} ${CUDART_LIBRARY})
+endif()
 
 # If RealSense SDK is found the library is added and its examples compiled
 if(realsense2_FOUND)

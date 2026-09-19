@@ -1,0 +1,10 @@
+%YAML:1.0
+# Optional MD-SLAM dynamic-scene front end.  Set enabled to 1 only after
+# exporting a fixed-shape YOLOv8 COCO detection engine (one CHW input and one
+# [1,84,N] or [1,N,84] output) with TensorRT.
+DynamicFilter:
+  enabled: 0
+  engine: "model/yolov8n.engine"
+  dynamicThreshold: 0.55
+  sampsonScale: 3.0
+  planeDistance: 0.05

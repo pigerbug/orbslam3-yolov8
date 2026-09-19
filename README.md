@@ -1,5 +1,65 @@
 # ORB-SLAM3
 
+## MD-SLAM 风格动态场景前端（YOLOv8 + TensorRT）
+
+本仓库在 ORB-SLAM3 前端中增加了参考 [MD-SLAM](https://github.com/pigerbug/MD-SLAM) 的动态场景处理链路。该功能默认关闭；关闭时与原始 ORB-SLAM3 的跟踪与优化行为一致。
+
+### 处理流程
+
+1. 后台线程使用 TensorRT 执行 YOLOv8 检测；追踪线程只读取最近一次完成的动态掩码，因此不会等待 GPU 推理。
+2. `person`、`bicycle`、`car`、`motorcycle`、`bus` 和 `truck` 检测框内的 ORB 特征得到 YOLO 动态先验，而非立即删除。
+3. 对 RGB-D 输入，深度平面的内点触发曼哈顿结构豁免，将该特征的动态概率置零。
+4. 对其余特征，使用相邻帧的基础矩阵计算桑普森距离，并与视觉先验取最大值。
+5. 位姿优化将每个观测的信息矩阵缩放为 `max(0.05, 1 - Pdynamic) * Ω`。动态点仍可由鲁棒核和重投影误差最终判为外点，避免检测误差导致静态背景被误杀。
+
+### TensorRT 构建
+
+需要已安装且相互兼容的 CUDA、TensorRT、OpenCV、Eigen3 与 Pangolin。TensorRT 关闭时无需 CUDA/TensorRT。
+
+```bash
+cmake -S . -B build -DORB_SLAM3_WITH_TENSORRT=ON -DTensorRT_ROOT=/path/to/TensorRT
+cmake --build build -j
+```
+
+Windows 示例：
+
+```powershell
+cmake -S . -B build -DORB_SLAM3_WITH_TENSORRT=ON -DTensorRT_ROOT="C:\TensorRT"
+cmake --build build --config Release
+```
+
+`TensorRT_ROOT` 应包含 `include/NvInfer.h` 与 `lib`（Linux）或 `lib/x64`（Windows）。CUDA 未位于默认位置时，额外传入 `-DCUDA_PATH=/path/to/cuda`。
+
+### YOLOv8 Engine 要求
+
+- 使用 COCO 类别顺序导出 YOLOv8 detection engine。
+- 输入必须为固定尺寸、三通道 CHW 张量，例如 `1x3x640x640`。
+- engine 必须恰好有一个输入和一个输出；输出形状为 `[1,84,N]` 或 `[1,N,84]`。
+- engine 与部署机器的 TensorRT 版本、CUDA 版本和 GPU 架构必须兼容。请在目标设备上构建或导出 engine。
+
+### 配置
+
+将 [Examples/DynamicFilter.yaml](Examples/DynamicFilter.yaml) 中的 `DynamicFilter` 段落复制到实际相机 YAML，并更新 `engine` 为 `.engine` 文件的绝对路径或相对于启动目录的路径：
+
+```yaml
+DynamicFilter:
+  enabled: 1
+  engine: "/data/models/yolov8n.engine"
+  dynamicThreshold: 0.55
+  sampsonScale: 3.0
+  planeDistance: 0.05
+```
+
+| 参数 | 含义 |
+| --- | --- |
+| `enabled` | `1` 启用动态前端；`0` 使用原始 ORB-SLAM3 行为。 |
+| `engine` | TensorRT 序列化 YOLOv8 detection engine 路径。 |
+| `dynamicThreshold` | 动态检测框内特征的初始动态概率。 |
+| `sampsonScale` | 桑普森距离转动态概率时的尺度，值越小对几何异常越敏感。 |
+| `planeDistance` | RGB-D 平面豁免距离阈值，单位与深度图一致。 |
+
+首次启用时，第一帧通常尚未有后台检测结果，随后帧会自动使用最新可用结果。若 engine 无法打开、未以 `ORB_SLAM3_WITH_TENSORRT=ON` 构建，或输出形状不匹配，动态先验不会生效；系统仍以原始 ORB-SLAM3 流程运行。
+
 ### V1.0, December 22th, 2021
 **Authors:** Carlos Campos, Richard Elvira, Juan J. Gómez Rodríguez, [José M. M. Montiel](http://webdiis.unizar.es/~josemari/), [Juan D. Tardos](http://webdiis.unizar.es/~jdtardos/).
 

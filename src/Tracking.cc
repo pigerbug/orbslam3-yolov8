@@ -55,6 +55,19 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     else{
         cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ);
 
+        cv::FileNode dynamicNode = fSettings["DynamicFilter"];
+        if(!dynamicNode.empty())
+        {
+            DynamicFeatureFilter::Config dynamicConfig;
+            dynamicConfig.enabled = (int)dynamicNode["enabled"] != 0;
+            if(!dynamicNode["dynamicThreshold"].empty()) dynamicConfig.dynamicThreshold = (float)dynamicNode["dynamicThreshold"];
+            if(!dynamicNode["sampsonScale"].empty()) dynamicConfig.sampsonScale = (float)dynamicNode["sampsonScale"];
+            if(!dynamicNode["planeDistance"].empty()) dynamicConfig.planeDistance = (float)dynamicNode["planeDistance"];
+            mDynamicFilter.Configure(dynamicConfig);
+            if(dynamicConfig.enabled && !dynamicNode["engine"].empty())
+                mDynamicFilter.LoadTensorRTEngine((string)dynamicNode["engine"]);
+        }
+
         bool b_parse_cam = ParseCamParamFile(fSettings);
         if(!b_parse_cam)
         {
@@ -1449,6 +1462,13 @@ bool Tracking::GetStepByStep()
     return bStepByStep;
 }
 
+void Tracking::ApplyDynamicPrior(const cv::Mat &image, const cv::Mat &depth)
+{
+    const std::vector<cv::KeyPoint> *previousKeys = mLastFrame.mvKeysUn.empty() ? NULL : &mLastFrame.mvKeysUn;
+    mDynamicFilter.Evaluate(image, depth, mCurrentFrame.mvKeysUn, previousKeys,
+                            mCurrentFrame.mvDynamicProbability, mCurrentFrame.mvbManhattanImmune);
+}
+
 
 
 Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRectRight, const double &timestamp, string filename)
@@ -1503,6 +1523,7 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat 
 
     mCurrentFrame.mNameFile = filename;
     mCurrentFrame.mnDataset = mnNumDataset;
+    ApplyDynamicPrior(mImGray);
 
 #ifdef REGISTER_TIMES
     vdORBExtract_ms.push_back(mCurrentFrame.mTimeORB_Ext);
@@ -1552,6 +1573,7 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
 
     mCurrentFrame.mNameFile = filename;
     mCurrentFrame.mnDataset = mnNumDataset;
+    ApplyDynamicPrior(mImGray, imDepth);
 
 #ifdef REGISTER_TIMES
     vdORBExtract_ms.push_back(mCurrentFrame.mTimeORB_Ext);
@@ -1603,6 +1625,7 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
 
     mCurrentFrame.mNameFile = filename;
     mCurrentFrame.mnDataset = mnNumDataset;
+    ApplyDynamicPrior(mImGray);
 
 #ifdef REGISTER_TIMES
     vdORBExtract_ms.push_back(mCurrentFrame.mTimeORB_Ext);

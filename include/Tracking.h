@@ -36,6 +36,7 @@
 #include "System.h"
 #include "ImuTypes.h"
 #include "Settings.h"
+#include "DynamicFeatureFilter.h"
 
 #include "GeometricCamera.h"
 
@@ -210,6 +211,7 @@ protected:
     void UpdateLastFrame();
     bool TrackWithMotionModel();
     bool PredictStateIMU();
+    void ApplyDynamicPrior(const cv::Mat &image, const cv::Mat &depth = cv::Mat());
 
     bool Relocalization();
 
@@ -260,6 +262,7 @@ protected:
     //ORB
     ORBextractor* mpORBextractorLeft, *mpORBextractorRight;
     ORBextractor* mpIniORBextractor;
+    DynamicFeatureFilter mDynamicFilter;
 
     //BoW
     ORBVocabulary* mpORBVocabulary;
