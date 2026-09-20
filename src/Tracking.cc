@@ -56,9 +56,12 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     {
         DynamicFeatureFilter::Config dynamicConfig;
         dynamicConfig.enabled = (int)dynamicNode["enabled"] != 0;
+        if(!dynamicNode["hardMask"].empty()) dynamicConfig.hardMask = (int)dynamicNode["hardMask"] != 0;
+        if(!dynamicNode["yoloPrior"].empty()) dynamicConfig.yoloPrior = (float)dynamicNode["yoloPrior"];
         if(!dynamicNode["dynamicThreshold"].empty()) dynamicConfig.dynamicThreshold = (float)dynamicNode["dynamicThreshold"];
         if(!dynamicNode["sampsonScale"].empty()) dynamicConfig.sampsonScale = (float)dynamicNode["sampsonScale"];
         if(!dynamicNode["planeDistance"].empty()) dynamicConfig.planeDistance = (float)dynamicNode["planeDistance"];
+        if(!dynamicNode["starvationThreshold"].empty()) dynamicConfig.starvationThreshold = (int)dynamicNode["starvationThreshold"];
         mDynamicFilter.Configure(dynamicConfig);
         if(dynamicConfig.enabled && !dynamicNode["engine"].empty())
         {
@@ -1471,24 +1474,24 @@ bool Tracking::GetStepByStep()
     return bStepByStep;
 }
 
-void Tracking::PrepareDynamicMask(const cv::Mat &detectionImage, cv::Mat &staticMask,
+void Tracking::PrepareDynamicMask(const cv::Mat &detectionImage, cv::Mat &dynamicMask,
+                                  cv::Mat &staticMask,
                                   std::vector<YoloBoundingBox> &boxes)
 {
-    cv::Mat dynamicMask;
-    if(mDynamicFilter.GetLatestDetections(detectionImage.size(),dynamicMask,boxes))
+    dynamicMask.release();
+    staticMask.release();
+    const bool hasDetections = mDynamicFilter.GetLatestDetections(detectionImage.size(),dynamicMask,boxes);
+    if(hasDetections && mDynamicFilter.UseHardMask())
         cv::bitwise_not(dynamicMask,staticMask);
-    else
-    {
-        staticMask.release();
+    if(!hasDetections)
         boxes.clear();
-    }
     mDynamicFilter.SubmitImage(detectionImage);
 }
 
 void Tracking::ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth)
 {
     const std::vector<cv::KeyPoint> *previousKeys = mLastFrame.mvKeysUn.empty() ? NULL : &mLastFrame.mvKeysUn;
-    mDynamicFilter.Evaluate(dynamicMask, depth, mCurrentFrame.mvKeysUn, previousKeys,
+    mDynamicFilter.Evaluate(dynamicMask, depth, mCurrentFrame.mK, mCurrentFrame.mvKeysUn, previousKeys,
                             mCurrentFrame.mvDynamicProbability, mCurrentFrame.mvbManhattanImmune);
 }
 
@@ -1533,8 +1536,7 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat 
 
     cv::Mat staticMask,dynamicMask;
     std::vector<YoloBoundingBox> dynamicBoxes;
-    PrepareDynamicMask(imRectLeft,staticMask,dynamicBoxes);
-    if(!staticMask.empty()) cv::bitwise_not(staticMask,dynamicMask);
+    PrepareDynamicMask(imRectLeft,dynamicMask,staticMask,dynamicBoxes);
 
     //cout << "Incoming frame creation" << endl;
 
@@ -1592,8 +1594,7 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
 
     cv::Mat staticMask,dynamicMask;
     std::vector<YoloBoundingBox> dynamicBoxes;
-    PrepareDynamicMask(imRGB,staticMask,dynamicBoxes);
-    if(!staticMask.empty()) cv::bitwise_not(staticMask,dynamicMask);
+    PrepareDynamicMask(imRGB,dynamicMask,staticMask,dynamicBoxes);
 
     if (mSensor == System::RGBD)
         mCurrentFrame = Frame(mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,NULL,IMU::Calib(),staticMask);
@@ -1640,8 +1641,7 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
 
     cv::Mat staticMask,dynamicMask;
     std::vector<YoloBoundingBox> dynamicBoxes;
-    PrepareDynamicMask(im,staticMask,dynamicBoxes);
-    if(!staticMask.empty()) cv::bitwise_not(staticMask,dynamicMask);
+    PrepareDynamicMask(im,dynamicMask,staticMask,dynamicBoxes);
 
     if (mSensor == System::MONOCULAR)
     {

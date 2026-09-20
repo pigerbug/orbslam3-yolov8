@@ -5,6 +5,9 @@
 DynamicFilter:
   enabled: 0
   engine: "model/yolov8n.engine"
-  dynamicThreshold: 0.55
-  sampsonScale: 3.0
+  # Default: retain all ORB features and downweight points inside a YOLO box.
+  # Set to 1 only to restore the old feature-extraction hard mask.
+  hardMask: 0
+  yoloPrior: 0.70
+  # RGB-D only: in metres, used for orthogonal-plane immunity.
   planeDistance: 0.05

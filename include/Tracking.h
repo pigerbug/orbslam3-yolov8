@@ -211,7 +211,8 @@ protected:
     void UpdateLastFrame();
     bool TrackWithMotionModel();
     bool PredictStateIMU();
-    void PrepareDynamicMask(const cv::Mat &detectionImage, cv::Mat &staticMask,
+    void PrepareDynamicMask(const cv::Mat &detectionImage, cv::Mat &dynamicMask,
+                            cv::Mat &staticMask,
                             std::vector<YoloBoundingBox> &boxes);
     void ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth = cv::Mat());
 

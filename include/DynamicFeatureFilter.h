@@ -22,11 +22,14 @@ class DynamicFeatureFilter {
 public:
     struct Config {
         bool enabled;
+        bool hardMask;
+        float yoloPrior;
         float dynamicThreshold;
         float sampsonScale;
         float planeDistance;
         int starvationThreshold;
-        Config() : enabled(false), dynamicThreshold(0.55f), sampsonScale(3.0f),
+        Config() : enabled(false), hardMask(false), yoloPrior(0.70f),
+                   dynamicThreshold(0.55f), sampsonScale(3.0f),
                    planeDistance(0.05f), starvationThreshold(80) {}
     };
 
@@ -35,6 +38,7 @@ public:
     void Configure(const Config &config);
     bool LoadTensorRTEngine(const std::string &enginePath);
     bool IsReady() const;
+    bool UseHardMask() const;
 
     // Queue the newest camera frame for the detector.  The worker deliberately
     // keeps one pending frame only, so detector overload never grows latency.
@@ -49,6 +53,7 @@ public:
     // dynamic probabilities. depth can be empty; then Manhattan immunity is
     // simply unavailable rather than guessed from monocular data.
     void Evaluate(const cv::Mat &dynamicMask, const cv::Mat &depth,
+                  const cv::Mat &cameraMatrix,
                   const std::vector<cv::KeyPoint> &keys,
                   const std::vector<cv::KeyPoint> *previousKeys,
                   std::vector<float> &dynamicProbability,
@@ -58,7 +63,7 @@ private:
     void WorkerLoop();
     bool InferDynamicMask(const cv::Mat &image, cv::Mat &mask,
                           std::vector<YoloBoundingBox> &boxes) const;
-    void ApplyManhattanImmunity(const cv::Mat &depth,
+    void ApplyManhattanImmunity(const cv::Mat &depth, const cv::Mat &cameraMatrix,
                                 const std::vector<cv::KeyPoint> &keys,
                                 std::vector<float> &probability,
                                 std::vector<unsigned char> &immune) const;
