@@ -11,7 +11,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -Wall   -O3")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall   -O3")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
-
+set(OpenCV_DIR "/home/nan/thrid_parties/opencv/opencv-4.8.0/build")
 # Check C++11 or C++0x support
 include(CheckCXXCompilerFlag)
 CHECK_CXX_COMPILER_FLAG("-std=c++11" COMPILER_SUPPORTS_CXX11)
@@ -42,16 +42,21 @@ find_package(Eigen3 3.1.0 REQUIRED)
 find_package(Pangolin REQUIRED)
 find_package(realsense2)
 
-option(ORB_SLAM3_WITH_TENSORRT "Enable the YOLOv8 TensorRT dynamic-scene prior" OFF)
+
+option(ORB_SLAM3_WITH_TENSORRT "Enable the YOLOv8 TensorRT dynamic-scene prior" ON)
 if(ORB_SLAM3_WITH_TENSORRT)
-    find_path(TENSORRT_INCLUDE_DIR NvInfer.h HINTS ENV TensorRT_ROOT PATH_SUFFIXES include)
-    find_library(TENSORRT_LIBRARY nvinfer HINTS ENV TensorRT_ROOT PATH_SUFFIXES lib lib64)
-    find_path(CUDA_INCLUDE_DIR cuda_runtime_api.h HINTS ENV CUDA_HOME ENV CUDA_PATH PATH_SUFFIXES include)
-    find_library(CUDART_LIBRARY cudart HINTS ENV CUDA_PATH ENV CUDA_HOME PATH_SUFFIXES lib lib64 lib/x64)
-    if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_LIBRARY OR NOT CUDA_INCLUDE_DIR OR NOT CUDART_LIBRARY)
-        message(FATAL_ERROR "TensorRT/CUDA not found. Set TensorRT_ROOT and CUDA_HOME, or configure with ORB_SLAM3_WITH_TENSORRT=OFF.")
-    endif()
-    add_definitions(-DORB_SLAM3_USE_TENSORRT)
+    set(TENSORRT_ROOT "/home/nan/thrid_parties/TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-11.8/TensorRT-8.6.1.6")
+find_path(TENSORRT_INCLUDE_DIR NvInfer.h HINTS ${TENSORRT_ROOT} PATH_SUFFIXES include)
+find_library(TENSORRT_LIBRARY nvinfer HINTS ${TENSORRT_ROOT} PATH_SUFFIXES lib lib64)
+
+# 直接指定 CUDA 路径，避免环境变量未生效的问题
+set(CUDA_HOME "/usr/local/cuda-11.8")
+find_path(CUDA_INCLUDE_DIR cuda_runtime_api.h HINTS ${CUDA_HOME} PATH_SUFFIXES include)
+find_library(CUDART_LIBRARY cudart HINTS ${CUDA_HOME} PATH_SUFFIXES lib lib64 lib/x64)
+
+if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_LIBRARY OR NOT CUDA_INCLUDE_DIR OR NOT CUDART_LIBRARY)
+    message(FATAL_ERROR "TensorRT/CUDA not found. Set TensorRT_ROOT and CUDA_HOME, or configure with ORB_SLAM3_WITH_TENSORRT=OFF.")
+endif()
 endif()
 
 include_directories(
