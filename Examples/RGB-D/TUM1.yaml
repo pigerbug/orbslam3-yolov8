@@ -69,3 +69,16 @@ Viewer.ViewpointY: -0.7
 Viewer.ViewpointZ: -1.8
 Viewer.ViewpointF: 500.0
 
+DynamicFilter:
+  enabled: 1
+  engine: "/home/你的用户名/ORB_SLAM3/model/yolov8n.engine"
+
+  # 0：推荐。仍提取框内 ORB 特征，在优化中按概率降权
+  # 1：直接不提取动态框中的左图 ORB 特征
+  hardMask: 0
+
+  # 框内特征的初始动态概率，优化信息矩阵约乘以 (1 - yoloPrior)
+  yoloPrior: 0.70
+
+  # 仅 RGB-D 有效，单位米；落在正交平面上的可疑点可被豁免
+  planeDistance: 0.05
