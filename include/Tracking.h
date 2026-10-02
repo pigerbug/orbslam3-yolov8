@@ -216,6 +216,7 @@ protected:
                             std::vector<YoloBoundingBox> &boxes);
     void ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth = cv::Mat());
     void UpdateGeometricDynamicPrior();
+    void RejectDynamicMapPointObservations();
 
     bool Relocalization();
 

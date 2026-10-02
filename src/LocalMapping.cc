@@ -311,6 +311,12 @@ void LocalMapping::ProcessNewKeyFrame()
 
     for(size_t i=0; i<vpMapPointMatches.size(); i++)
     {
+        if(i < mpCurrentKeyFrame->mvbDynamicForMapping.size() &&
+           mpCurrentKeyFrame->mvbDynamicForMapping[i])
+        {
+            mpCurrentKeyFrame->EraseMapPointMatch(i);
+            continue;
+        }
         MapPoint* pMP = vpMapPointMatches[i];
         if(pMP)
         {

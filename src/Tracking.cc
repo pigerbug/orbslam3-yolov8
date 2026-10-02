@@ -1530,6 +1530,16 @@ void Tracking::UpdateGeometricDynamicPrior()
             mCurrentFrame.mvDynamicProbability[i], mCurrentFrame.mvbManhattanImmune[i]);
 }
 
+void Tracking::RejectDynamicMapPointObservations()
+{
+    for(size_t i = 0; i < mCurrentFrame.mvpMapPoints.size(); ++i)
+        if(i < mCurrentFrame.mvbDynamicForMapping.size() && mCurrentFrame.mvbDynamicForMapping[i])
+        {
+            mCurrentFrame.mvpMapPoints[i] = static_cast<MapPoint*>(NULL);
+            mCurrentFrame.mvbOutlier[i] = true;
+        }
+}
+
 
 
 Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRectRight, const double &timestamp, string filename)
@@ -2849,6 +2859,7 @@ bool Tracking::TrackReferenceKeyFrame()
 
     // cout << " TrackReferenceKeyFrame mLastFrame.mTcw:  " << mLastFrame.mTcw << endl;
     UpdateGeometricDynamicPrior();
+    RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
 
     // Discard outliers
@@ -3014,6 +3025,7 @@ bool Tracking::TrackWithMotionModel()
 
     // Optimize frame pose with all matches
     UpdateGeometricDynamicPrior();
+    RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
 
     // Discard outliers
@@ -3063,6 +3075,7 @@ bool Tracking::TrackLocalMap()
 
     UpdateLocalMap();
     SearchLocalPoints();
+    RejectDynamicMapPointObservations();
 
     // TOO check outliers before PO
     int aux1 = 0, aux2=0;
@@ -3075,6 +3088,7 @@ bool Tracking::TrackLocalMap()
         }
 
     UpdateGeometricDynamicPrior();
+    RejectDynamicMapPointObservations();
     int inliers;
     if (!mpAtlas->isImuInitialized())
         Optimizer::PoseOptimization(&mCurrentFrame);

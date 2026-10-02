@@ -865,6 +865,12 @@ int Optimizer::PoseOptimization(Frame *pFrame)
 
     for(int i=0; i<N; i++)
     {
+        if(i < static_cast<int>(pFrame->mvbDynamicForMapping.size()) && pFrame->mvbDynamicForMapping[i])
+        {
+            pFrame->mvpMapPoints[i] = static_cast<MapPoint*>(NULL);
+            pFrame->mvbOutlier[i] = true;
+            continue;
+        }
         MapPoint* pMP = pFrame->mvpMapPoints[i];
         if(pMP)
         {
