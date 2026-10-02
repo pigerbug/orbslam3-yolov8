@@ -45,18 +45,47 @@ find_package(realsense2)
 
 option(ORB_SLAM3_WITH_TENSORRT "Enable the YOLOv8 TensorRT dynamic-scene prior" ON)
 if(ORB_SLAM3_WITH_TENSORRT)
-    set(TENSORRT_ROOT "/home/nan/thrid_parties/TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-11.8/TensorRT-8.6.1.6")
-find_path(TENSORRT_INCLUDE_DIR NvInfer.h HINTS ${TENSORRT_ROOT} PATH_SUFFIXES include)
-find_library(TENSORRT_LIBRARY nvinfer HINTS ${TENSORRT_ROOT} PATH_SUFFIXES lib lib64)
+    # Command-line values override these local defaults:
+    # cmake .. -DTensorRT_ROOT=/opt/TensorRT -DCUDA_HOME=/usr/local/cuda-11.8
+    if(NOT TensorRT_ROOT)
+        set(TensorRT_ROOT "/home/nan/thrid_parties/TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-11.8/TensorRT-8.6.1.6")
+    endif()
+    if(NOT EXISTS "${TensorRT_ROOT}")
+        message(WARNING "TensorRT_ROOT was not found: ${TensorRT_ROOT}")
+    else()
+        message(STATUS "TensorRT_ROOT: ${TensorRT_ROOT}")
+    endif()
+    find_path(TENSORRT_INCLUDE_DIR NvInfer.h HINTS "${TensorRT_ROOT}" PATH_SUFFIXES include)
+    find_library(TENSORRT_LIBRARY nvinfer HINTS "${TensorRT_ROOT}" PATH_SUFFIXES lib lib64)
 
 # 直接指定 CUDA 路径，避免环境变量未生效的问题
-set(CUDA_HOME "/usr/local/cuda-11.8")
-find_path(CUDA_INCLUDE_DIR cuda_runtime_api.h HINTS ${CUDA_HOME} PATH_SUFFIXES include)
-find_library(CUDART_LIBRARY cudart HINTS ${CUDA_HOME} PATH_SUFFIXES lib lib64 lib/x64)
+    if(NOT CUDA_HOME)
+        set(CUDA_HOME "/usr/local/cuda-11.8")
+    endif()
+    if(NOT EXISTS "${CUDA_HOME}")
+        message(WARNING "CUDA_HOME was not found: ${CUDA_HOME}")
+    else()
+        message(STATUS "CUDA_HOME: ${CUDA_HOME}")
+    endif()
+    find_path(CUDA_INCLUDE_DIR cuda_runtime_api.h HINTS "${CUDA_HOME}" PATH_SUFFIXES include)
+    find_library(CUDART_LIBRARY cudart HINTS "${CUDA_HOME}" PATH_SUFFIXES lib lib64 lib/x64)
 
-if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_LIBRARY OR NOT CUDA_INCLUDE_DIR OR NOT CUDART_LIBRARY)
-    message(FATAL_ERROR "TensorRT/CUDA not found. Set TensorRT_ROOT and CUDA_HOME, or configure with ORB_SLAM3_WITH_TENSORRT=OFF.")
-endif()
+    if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_LIBRARY OR NOT CUDA_INCLUDE_DIR OR NOT CUDART_LIBRARY)
+        message(FATAL_ERROR
+            "TensorRT/CUDA lookup failed.\n"
+            "  TensorRT_ROOT=${TensorRT_ROOT}\n"
+            "  CUDA_HOME=${CUDA_HOME}\n"
+            "  TENSORRT_INCLUDE_DIR=${TENSORRT_INCLUDE_DIR}\n"
+            "  TENSORRT_LIBRARY=${TENSORRT_LIBRARY}\n"
+            "  CUDA_INCLUDE_DIR=${CUDA_INCLUDE_DIR}\n"
+            "  CUDART_LIBRARY=${CUDART_LIBRARY}\n"
+            "Pass -DTensorRT_ROOT=<TensorRT dir> -DCUDA_HOME=<CUDA dir>, or set ORB_SLAM3_WITH_TENSORRT=OFF.")
+    endif()
+    message(STATUS "TensorRT include: ${TENSORRT_INCLUDE_DIR}")
+    message(STATUS "TensorRT library: ${TENSORRT_LIBRARY}")
+    message(STATUS "CUDA include: ${CUDA_INCLUDE_DIR}")
+    message(STATUS "CUDA runtime library: ${CUDART_LIBRARY}")
+    add_definitions(-DORB_SLAM3_USE_TENSORRT)
 endif()
 
 include_directories(
