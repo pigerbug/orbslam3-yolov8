@@ -232,6 +232,7 @@ public:
 
     std::vector<float> mvDynamicProbability;
     std::vector<unsigned char> mvbManhattanImmune;
+    std::vector<unsigned char> mvbDynamicForMapping;
     std::vector<YoloBoundingBox> mvDynamicBoxes;
 
     // Corresponding stereo coordinate and depth for each keypoint.

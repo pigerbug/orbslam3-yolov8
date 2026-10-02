@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <memory>
 #include <vector>
+#include <cstdint>
 #include "YoloDetector.h"
 
 namespace ORB_SLAM3 {
@@ -28,9 +29,10 @@ public:
         float sampsonScale;
         float planeDistance;
         int starvationThreshold;
+        int resultWaitMs;
         Config() : enabled(false), hardMask(false), yoloPrior(0.70f),
                    dynamicThreshold(0.55f), sampsonScale(3.0f),
-                   planeDistance(0.05f), starvationThreshold(80) {}
+                   planeDistance(0.05f), starvationThreshold(80), resultWaitMs(10) {}
     };
 
     explicit DynamicFeatureFilter(const Config &config = Config());
@@ -39,15 +41,21 @@ public:
     bool LoadTensorRTEngine(const std::string &enginePath);
     bool IsReady() const;
     bool UseHardMask() const;
+    int ResultWaitMs() const;
+    bool IsDynamicForMapping(float probability, unsigned char immune) const;
+    void ApplySampsonProbability(const std::vector<cv::Point2f> &previousPoints,
+                                 const std::vector<cv::Point2f> &currentPoints,
+                                 const std::vector<size_t> &currentIndices,
+                                 std::vector<float> &dynamicProbability) const;
 
     // Queue the newest camera frame for the detector.  The worker deliberately
     // keeps one pending frame only, so detector overload never grows latency.
-    void SubmitImage(const cv::Mat &image) const;
+    void SubmitImage(uint64_t frameId, const cv::Mat &image) const;
 
     // Returns the newest result with matching image dimensions. dynamicMask
     // uses 255 for dynamic pixels; boxes belong to that same result.
-    bool GetLatestDetections(const cv::Size &imageSize, cv::Mat &dynamicMask,
-                             std::vector<YoloBoundingBox> &boxes) const;
+    bool WaitForDetections(uint64_t frameId, const cv::Size &imageSize, int timeoutMs,
+                           cv::Mat &dynamicMask, std::vector<YoloBoundingBox> &boxes) const;
 
     // Runs YOLOv8/TensorRT (when compiled/configured) and updates per-feature
     // dynamic probabilities. depth can be empty; then Manhattan immunity is
@@ -73,8 +81,10 @@ private:
     mutable std::mutex mMutex;
     mutable std::condition_variable mCondition;
     mutable cv::Mat mPendingImage;
+    mutable uint64_t mPendingFrameId;
     mutable cv::Mat mLatestMask;
     mutable std::vector<YoloBoundingBox> mLatestBoxes;
+    mutable uint64_t mLatestFrameId;
     bool mbStopWorker;
     mutable bool mbPendingImage;
     std::thread mWorker;

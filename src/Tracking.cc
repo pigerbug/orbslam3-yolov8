@@ -46,7 +46,7 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mbOnlyTracking(false), mbMapUpdated(false), mbVO(false), mpORBVocabulary(pVoc), mpKeyFrameDB(pKFDB),
     mbReadyToInitializate(false), mpSystem(pSys), mpViewer(NULL), bStepByStep(false),
     mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpAtlas(pAtlas), mnLastRelocFrameId(0), time_recently_lost(5.0),
-    mnInitialFrameId(0), mbCreatedMap(false), mnFirstFrameId(0), mpCamera2(nullptr), mpLastKeyFrame(static_cast<KeyFrame*>(NULL))
+    mnInitialFrameId(0), mbCreatedMap(false), mnFirstFrameId(0), mpCamera2(nullptr), mpLastKeyFrame(static_cast<KeyFrame*>(NULL)), mnDynamicInputFrameId(0)
 {
     // DynamicFilter is an extension field, therefore read it from both the
     // legacy YAML format and the File.version: 1.0 Settings format.
@@ -62,6 +62,7 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         if(!dynamicNode["sampsonScale"].empty()) dynamicConfig.sampsonScale = (float)dynamicNode["sampsonScale"];
         if(!dynamicNode["planeDistance"].empty()) dynamicConfig.planeDistance = (float)dynamicNode["planeDistance"];
         if(!dynamicNode["starvationThreshold"].empty()) dynamicConfig.starvationThreshold = (int)dynamicNode["starvationThreshold"];
+        if(!dynamicNode["resultWaitMs"].empty()) dynamicConfig.resultWaitMs = (int)dynamicNode["resultWaitMs"];
         mDynamicFilter.Configure(dynamicConfig);
         if(dynamicConfig.enabled && !dynamicNode["engine"].empty())
         {
@@ -1474,18 +1475,19 @@ bool Tracking::GetStepByStep()
     return bStepByStep;
 }
 
-void Tracking::PrepareDynamicMask(const cv::Mat &detectionImage, cv::Mat &dynamicMask,
+void Tracking::PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImage, cv::Mat &dynamicMask,
                                   cv::Mat &staticMask,
                                   std::vector<YoloBoundingBox> &boxes)
 {
     dynamicMask.release();
     staticMask.release();
-    const bool hasDetections = mDynamicFilter.GetLatestDetections(detectionImage.size(),dynamicMask,boxes);
+    mDynamicFilter.SubmitImage(frameId, detectionImage);
+    const bool hasDetections = mDynamicFilter.WaitForDetections(frameId, detectionImage.size(),
+                                                                 mDynamicFilter.ResultWaitMs(), dynamicMask, boxes);
     if(hasDetections && mDynamicFilter.UseHardMask())
         cv::bitwise_not(dynamicMask,staticMask);
     if(!hasDetections)
         boxes.clear();
-    mDynamicFilter.SubmitImage(detectionImage);
 }
 
 void Tracking::ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth)
@@ -1493,6 +1495,39 @@ void Tracking::ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &dept
     const std::vector<cv::KeyPoint> *previousKeys = mLastFrame.mvKeysUn.empty() ? NULL : &mLastFrame.mvKeysUn;
     mDynamicFilter.Evaluate(dynamicMask, depth, mCurrentFrame.mK, mCurrentFrame.mvKeysUn, previousKeys,
                             mCurrentFrame.mvDynamicProbability, mCurrentFrame.mvbManhattanImmune);
+    mCurrentFrame.mvbDynamicForMapping.resize(mCurrentFrame.mvDynamicProbability.size(), 0);
+    for(size_t i = 0; i < mCurrentFrame.mvDynamicProbability.size(); ++i)
+        mCurrentFrame.mvbDynamicForMapping[i] = mDynamicFilter.IsDynamicForMapping(
+            mCurrentFrame.mvDynamicProbability[i], mCurrentFrame.mvbManhattanImmune[i]);
+}
+
+void Tracking::UpdateGeometricDynamicPrior()
+{
+    std::map<MapPoint*, size_t> previousObservations;
+    for(size_t i = 0; i < mLastFrame.mvpMapPoints.size(); ++i)
+        if(mLastFrame.mvpMapPoints[i] && i < mLastFrame.mvKeysUn.size())
+            previousObservations[mLastFrame.mvpMapPoints[i]] = i;
+
+    std::vector<cv::Point2f> previousPoints;
+    std::vector<cv::Point2f> currentPoints;
+    std::vector<size_t> currentIndices;
+    for(size_t i = 0; i < mCurrentFrame.mvpMapPoints.size() && i < mCurrentFrame.mvKeysUn.size(); ++i)
+    {
+        MapPoint *point = mCurrentFrame.mvpMapPoints[i];
+        std::map<MapPoint*, size_t>::const_iterator match = previousObservations.find(point);
+        if(point && match != previousObservations.end())
+        {
+            previousPoints.push_back(mLastFrame.mvKeysUn[match->second].pt);
+            currentPoints.push_back(mCurrentFrame.mvKeysUn[i].pt);
+            currentIndices.push_back(i);
+        }
+    }
+
+    mDynamicFilter.ApplySampsonProbability(previousPoints, currentPoints, currentIndices,
+                                           mCurrentFrame.mvDynamicProbability);
+    for(size_t i = 0; i < mCurrentFrame.mvDynamicProbability.size(); ++i)
+        mCurrentFrame.mvbDynamicForMapping[i] = mDynamicFilter.IsDynamicForMapping(
+            mCurrentFrame.mvDynamicProbability[i], mCurrentFrame.mvbManhattanImmune[i]);
 }
 
 
@@ -1536,7 +1571,7 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat 
 
     cv::Mat staticMask,dynamicMask;
     std::vector<YoloBoundingBox> dynamicBoxes;
-    PrepareDynamicMask(imRectLeft,dynamicMask,staticMask,dynamicBoxes);
+    PrepareDynamicMask(++mnDynamicInputFrameId,imRectLeft,dynamicMask,staticMask,dynamicBoxes);
 
     //cout << "Incoming frame creation" << endl;
 
@@ -1594,7 +1629,7 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
 
     cv::Mat staticMask,dynamicMask;
     std::vector<YoloBoundingBox> dynamicBoxes;
-    PrepareDynamicMask(imRGB,dynamicMask,staticMask,dynamicBoxes);
+    PrepareDynamicMask(++mnDynamicInputFrameId,imRGB,dynamicMask,staticMask,dynamicBoxes);
 
     if (mSensor == System::RGBD)
         mCurrentFrame = Frame(mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,NULL,IMU::Calib(),staticMask);
@@ -1641,7 +1676,7 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
 
     cv::Mat staticMask,dynamicMask;
     std::vector<YoloBoundingBox> dynamicBoxes;
-    PrepareDynamicMask(im,dynamicMask,staticMask,dynamicBoxes);
+    PrepareDynamicMask(++mnDynamicInputFrameId,im,dynamicMask,staticMask,dynamicBoxes);
 
     if (mSensor == System::MONOCULAR)
     {
@@ -2444,7 +2479,8 @@ void Tracking::StereoInitialization()
             for(int i=0; i<mCurrentFrame.N;i++)
             {
                 float z = mCurrentFrame.mvDepth[i];
-                if(z>0)
+                if(z>0 && (i >= static_cast<int>(mCurrentFrame.mvbDynamicForMapping.size()) ||
+                           !mCurrentFrame.mvbDynamicForMapping[i]))
                 {
                     Eigen::Vector3f x3D;
                     mCurrentFrame.UnprojectStereo(i, x3D);
@@ -2461,7 +2497,8 @@ void Tracking::StereoInitialization()
         } else{
             for(int i = 0; i < mCurrentFrame.Nleft; i++){
                 int rightIndex = mCurrentFrame.mvLeftToRightMatch[i];
-                if(rightIndex != -1){
+                if(rightIndex != -1 && (i >= static_cast<int>(mCurrentFrame.mvbDynamicForMapping.size()) ||
+                                        !mCurrentFrame.mvbDynamicForMapping[i])){
                     Eigen::Vector3f x3D = mCurrentFrame.mvStereo3Dpoints[i];
 
                     MapPoint* pNewMP = new MapPoint(x3D, pKFini, mpAtlas->GetCurrentMap());
@@ -2607,6 +2644,11 @@ void Tracking::CreateInitialMapMonocular()
     for(size_t i=0; i<mvIniMatches.size();i++)
     {
         if(mvIniMatches[i]<0)
+            continue;
+
+        if((i < mInitialFrame.mvbDynamicForMapping.size() && mInitialFrame.mvbDynamicForMapping[i]) ||
+           (mvIniMatches[i] < mCurrentFrame.mvbDynamicForMapping.size() &&
+            mCurrentFrame.mvbDynamicForMapping[mvIniMatches[i]]))
             continue;
 
         //Create MapPoint.
@@ -2806,6 +2848,7 @@ bool Tracking::TrackReferenceKeyFrame()
 
 
     // cout << " TrackReferenceKeyFrame mLastFrame.mTcw:  " << mLastFrame.mTcw << endl;
+    UpdateGeometricDynamicPrior();
     Optimizer::PoseOptimization(&mCurrentFrame);
 
     // Discard outliers
@@ -2970,6 +3013,7 @@ bool Tracking::TrackWithMotionModel()
     }
 
     // Optimize frame pose with all matches
+    UpdateGeometricDynamicPrior();
     Optimizer::PoseOptimization(&mCurrentFrame);
 
     // Discard outliers
@@ -3030,6 +3074,7 @@ bool Tracking::TrackLocalMap()
                 aux2++;
         }
 
+    UpdateGeometricDynamicPrior();
     int inliers;
     if (!mpAtlas->isImuInitialized())
         Optimizer::PoseOptimization(&mCurrentFrame);
@@ -3339,6 +3384,10 @@ void Tracking::CreateNewKeyFrame()
             for(size_t j=0; j<vDepthIdx.size();j++)
             {
                 int i = vDepthIdx[j].second;
+
+                if(i < static_cast<int>(mCurrentFrame.mvbDynamicForMapping.size()) &&
+                   mCurrentFrame.mvbDynamicForMapping[i])
+                    continue;
 
                 bool bCreateNew = false;
 

@@ -485,6 +485,12 @@ void LocalMapping::CreateNewMapPoints()
             const int &idx1 = vMatchedIndices[ikp].first;
             const int &idx2 = vMatchedIndices[ikp].second;
 
+            if((idx1 < static_cast<int>(mpCurrentKeyFrame->mvbDynamicForMapping.size()) &&
+                mpCurrentKeyFrame->mvbDynamicForMapping[idx1]) ||
+               (idx2 < static_cast<int>(pKF2->mvbDynamicForMapping.size()) &&
+                pKF2->mvbDynamicForMapping[idx2]))
+                continue;
+
             const cv::KeyPoint &kp1 = (mpCurrentKeyFrame -> NLeft == -1) ? mpCurrentKeyFrame->mvKeysUn[idx1]
                                                                          : (idx1 < mpCurrentKeyFrame -> NLeft) ? mpCurrentKeyFrame -> mvKeys[idx1]
                                                                                                                : mpCurrentKeyFrame -> mvKeysRight[idx1 - mpCurrentKeyFrame -> NLeft];

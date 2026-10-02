@@ -9,5 +9,10 @@ DynamicFilter:
   # Set to 1 only to restore the old feature-extraction hard mask.
   hardMask: 0
   yoloPrior: 0.70
+  # Features at or above this probability cannot create persistent MapPoints.
+  dynamicThreshold: 0.55
+  # Maximum main-thread wait for the matching detector result. A result from a
+  # different frame is never reused; 0 means no wait.
+  resultWaitMs: 10
   # RGB-D only: in metres, used for orthogonal-plane immunity.
   planeDistance: 0.05

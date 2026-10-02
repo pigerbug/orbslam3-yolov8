@@ -211,10 +211,11 @@ protected:
     void UpdateLastFrame();
     bool TrackWithMotionModel();
     bool PredictStateIMU();
-    void PrepareDynamicMask(const cv::Mat &detectionImage, cv::Mat &dynamicMask,
+    void PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImage, cv::Mat &dynamicMask,
                             cv::Mat &staticMask,
                             std::vector<YoloBoundingBox> &boxes);
     void ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth = cv::Mat());
+    void UpdateGeometricDynamicPrior();
 
     bool Relocalization();
 
@@ -266,6 +267,7 @@ protected:
     ORBextractor* mpORBextractorLeft, *mpORBextractorRight;
     ORBextractor* mpIniORBextractor;
     DynamicFeatureFilter mDynamicFilter;
+    uint64_t mnDynamicInputFrameId;
 
     //BoW
     ORBVocabulary* mpORBVocabulary;

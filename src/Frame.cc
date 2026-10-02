@@ -57,7 +57,7 @@ Frame::Frame(const Frame &frame)
      mTimeStamp(frame.mTimeStamp), mK(frame.mK.clone()), mK_(Converter::toMatrix3f(frame.mK)), mDistCoef(frame.mDistCoef.clone()),
      mbf(frame.mbf), mb(frame.mb), mThDepth(frame.mThDepth), N(frame.N), mvKeys(frame.mvKeys),
      mvKeysRight(frame.mvKeysRight), mvKeysUn(frame.mvKeysUn), mvuRight(frame.mvuRight),
-     mvDynamicProbability(frame.mvDynamicProbability), mvbManhattanImmune(frame.mvbManhattanImmune), mvDynamicBoxes(frame.mvDynamicBoxes),
+     mvDynamicProbability(frame.mvDynamicProbability), mvbManhattanImmune(frame.mvbManhattanImmune), mvbDynamicForMapping(frame.mvbDynamicForMapping), mvDynamicBoxes(frame.mvDynamicBoxes),
      mvDepth(frame.mvDepth), mBowVec(frame.mBowVec), mFeatVec(frame.mFeatVec),
      mDescriptors(frame.mDescriptors.clone()), mDescriptorsRight(frame.mDescriptorsRight.clone()),
      mvpMapPoints(frame.mvpMapPoints), mvbOutlier(frame.mvbOutlier), mImuCalib(frame.mImuCalib), mnCloseMPs(frame.mnCloseMPs),

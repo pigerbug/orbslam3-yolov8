@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
+#include <opencv2/calib3d.hpp>
 
 namespace ORB_SLAM3
 {
@@ -127,7 +129,8 @@ std::vector<PlaneModel> ExtractOrthogonalPlanes(const cv::Mat &depth, const cv::
 }
 
 DynamicFeatureFilter::DynamicFeatureFilter(const Config &config)
-    : mConfig(config), mbEngineReady(false), mbStopWorker(false), mbPendingImage(false)
+    : mConfig(config), mbEngineReady(false), mbStopWorker(false), mbPendingImage(false),
+      mPendingFrameId(0), mLatestFrameId(0)
 {
 }
 
@@ -169,23 +172,69 @@ bool DynamicFeatureFilter::UseHardMask() const
     return mConfig.enabled && mConfig.hardMask && IsReady();
 }
 
-void DynamicFeatureFilter::SubmitImage(const cv::Mat &image) const
+int DynamicFeatureFilter::ResultWaitMs() const
+{
+    return mConfig.resultWaitMs;
+}
+
+bool DynamicFeatureFilter::IsDynamicForMapping(float probability, unsigned char immune) const
+{
+    return !immune && probability >= mConfig.dynamicThreshold;
+}
+
+void DynamicFeatureFilter::ApplySampsonProbability(const std::vector<cv::Point2f> &previousPoints,
+                                                    const std::vector<cv::Point2f> &currentPoints,
+                                                    const std::vector<size_t> &currentIndices,
+                                                    std::vector<float> &dynamicProbability) const
+{
+    if(previousPoints.size() != currentPoints.size() || currentPoints.size() != currentIndices.size() ||
+       currentPoints.size() < 8)
+        return;
+
+    const cv::Mat fundamental = cv::findFundamentalMat(previousPoints, currentPoints, cv::FM_RANSAC, 1.0, 0.99);
+    if(fundamental.empty())
+        return;
+
+    cv::Mat F;
+    fundamental.convertTo(F, CV_64F);
+    const double sigma2 = std::max(1e-6, static_cast<double>(mConfig.sampsonScale) * mConfig.sampsonScale);
+    for(size_t i = 0; i < currentPoints.size(); ++i)
+    {
+        const cv::Mat x1 = (cv::Mat_<double>(3, 1) << previousPoints[i].x, previousPoints[i].y, 1.0);
+        const cv::Mat x2 = (cv::Mat_<double>(3, 1) << currentPoints[i].x, currentPoints[i].y, 1.0);
+        const cv::Mat Fx1 = F * x1;
+        const cv::Mat Ftx2 = F.t() * x2;
+        const double numerator = x2.dot(Fx1);
+        const double denominator = Fx1.at<double>(0) * Fx1.at<double>(0) + Fx1.at<double>(1) * Fx1.at<double>(1) +
+                                   Ftx2.at<double>(0) * Ftx2.at<double>(0) + Ftx2.at<double>(1) * Ftx2.at<double>(1);
+        if(denominator <= 1e-12 || currentIndices[i] >= dynamicProbability.size())
+            continue;
+        const double sampson2 = numerator * numerator / denominator;
+        const float probability = static_cast<float>(1.0 - std::exp(-sampson2 / sigma2));
+        dynamicProbability[currentIndices[i]] = std::max(dynamicProbability[currentIndices[i]], probability);
+    }
+}
+
+void DynamicFeatureFilter::SubmitImage(uint64_t frameId, const cv::Mat &image) const
 {
     if(!mbEngineReady || image.empty())
         return;
     {
         std::lock_guard<std::mutex> lock(mMutex);
         mPendingImage = image.clone();
+        mPendingFrameId = frameId;
         mbPendingImage = true;
     }
     mCondition.notify_one();
 }
 
-bool DynamicFeatureFilter::GetLatestDetections(const cv::Size &imageSize, cv::Mat &mask,
-                                                std::vector<YoloBoundingBox> &boxes) const
+bool DynamicFeatureFilter::WaitForDetections(uint64_t frameId, const cv::Size &imageSize, int timeoutMs,
+                                             cv::Mat &mask, std::vector<YoloBoundingBox> &boxes) const
 {
-    std::lock_guard<std::mutex> lock(mMutex);
-    if(mLatestMask.empty() || mLatestMask.size() != imageSize)
+    std::unique_lock<std::mutex> lock(mMutex);
+    const std::chrono::milliseconds timeout(std::max(0, timeoutMs));
+    mCondition.wait_for(lock, timeout, [this, frameId] { return mLatestFrameId >= frameId || mbStopWorker; });
+    if(mLatestFrameId != frameId || mLatestMask.empty() || mLatestMask.size() != imageSize)
         return false;
     mask = mLatestMask.clone();
     boxes = mLatestBoxes;
@@ -197,12 +246,14 @@ void DynamicFeatureFilter::WorkerLoop()
     while(true)
     {
         cv::Mat image;
+        uint64_t frameId = 0;
         {
             std::unique_lock<std::mutex> lock(mMutex);
             mCondition.wait(lock, [this] { return mbStopWorker || mbPendingImage; });
             if(mbStopWorker)
                 return;
             image = mPendingImage;
+            frameId = mPendingFrameId;
             mbPendingImage = false;
         }
 
@@ -213,6 +264,8 @@ void DynamicFeatureFilter::WorkerLoop()
             std::lock_guard<std::mutex> lock(mMutex);
             mLatestMask = mask;
             mLatestBoxes = boxes;
+            mLatestFrameId = frameId;
+            mCondition.notify_all();
         }
     }
 }
