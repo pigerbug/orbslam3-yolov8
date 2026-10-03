@@ -386,6 +386,7 @@ public:
     std::vector<unsigned char> mvbDynamicForMapping;
     const std::vector<float> mvuRight; // negative value for monocular points
     const std::vector<float> mvDepth; // negative value for monocular points
+    const cv::Mat mImDepth;
     const cv::Mat mDescriptors;
 
     //BoW

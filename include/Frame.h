@@ -229,6 +229,7 @@ public:
     // In the stereo case, mvKeysUn is redundant as images must be rectified.
     // In the RGB-D case, RGB images can be distorted.
     std::vector<cv::KeyPoint> mvKeys, mvKeysRight;
+    cv::Mat mImDepth;
     std::vector<cv::line_descriptor::KeyLine> mvKeyLines;
     cv::Mat mLineDescriptors;
     std::vector<cv::KeyPoint> mvKeysUn;
