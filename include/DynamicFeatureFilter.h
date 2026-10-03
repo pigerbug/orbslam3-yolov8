@@ -42,6 +42,7 @@ public:
     bool IsReady() const;
     bool UseHardMask() const;
     int ResultWaitMs() const;
+    float PlaneDistance() const;
     bool IsDynamicForMapping(float probability, unsigned char immune) const;
     void ApplySampsonProbability(const std::vector<cv::Point2f> &previousPoints,
                                  const std::vector<cv::Point2f> &currentPoints,

@@ -26,9 +26,22 @@
 
 #include<mutex>
 #include<chrono>
+#include<cmath>
 
 namespace ORB_SLAM3
 {
+namespace
+{
+bool MakePlane(const Eigen::Vector3f &a, const Eigen::Vector3f &b, const Eigen::Vector3f &c, cv::Vec4f &plane)
+{
+    Eigen::Vector3f n = (b-a).cross(c-a);
+    const float length = n.norm();
+    if(length < 1e-5f) return false;
+    n /= length;
+    plane = cv::Vec4f(n.x(), n.y(), n.z(), -n.dot(a));
+    return true;
+}
+}
 
 LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular, bool bInertial, const string &_strSeqName):
     mpSystem(pSys), mbMonocular(bMonocular), mbInertial(bInertial), mbResetRequested(false), mbResetRequestedActiveMap(false), mbFinishRequested(false), mbFinished(true), mpAtlas(pAtlas), bInitializing(false),
@@ -305,6 +318,7 @@ void LocalMapping::ProcessNewKeyFrame()
 
     // Compute Bags of Words structures
     mpCurrentKeyFrame->ComputeBoW();
+    UpdateManhattanPlanes();
 
     // Associate MapPoints to the new keyframe and update normal and descriptor
     const vector<MapPoint*> vpMapPointMatches = mpCurrentKeyFrame->GetMapPointMatches();
@@ -341,6 +355,64 @@ void LocalMapping::ProcessNewKeyFrame()
 
     // Insert Keyframe in Map
     mpAtlas->AddKeyFrame(mpCurrentKeyFrame);
+}
+
+void LocalMapping::UpdateManhattanPlanes()
+{
+    std::vector<Eigen::Vector3f> points;
+    for(int i = 0; i < mpCurrentKeyFrame->N; ++i)
+    {
+        if(i < static_cast<int>(mpCurrentKeyFrame->mvbDynamicForMapping.size()) &&
+           mpCurrentKeyFrame->mvbDynamicForMapping[i]) continue;
+        Eigen::Vector3f point;
+        if(mpCurrentKeyFrame->UnprojectStereo(i, point)) points.push_back(point);
+    }
+    if(points.size() < 80) return;
+
+    cv::RNG rng(static_cast<uint64>(mpCurrentKeyFrame->mnId));
+    std::vector<cv::Vec4f> candidates;
+    for(int planeNo = 0; planeNo < 3; ++planeNo)
+    {
+        cv::Vec4f best; int bestCount = 0;
+        for(int it = 0; it < 100; ++it)
+        {
+            cv::Vec4f plane;
+            const int a = rng.uniform(0, static_cast<int>(points.size()));
+            const int b = rng.uniform(0, static_cast<int>(points.size()));
+            const int c = rng.uniform(0, static_cast<int>(points.size()));
+            if(a == b || a == c || b == c || !MakePlane(points[a], points[b], points[c], plane)) continue;
+            int count = 0;
+            for(size_t j = 0; j < points.size(); ++j)
+            {
+                bool alreadyExplained = false;
+                for(size_t k = 0; k < candidates.size(); ++k)
+                    if(std::fabs(candidates[k][0]*points[j].x()+candidates[k][1]*points[j].y()+candidates[k][2]*points[j].z()+candidates[k][3]) < 0.05f)
+                        alreadyExplained = true;
+                if(!alreadyExplained && std::fabs(plane[0]*points[j].x()+plane[1]*points[j].y()+plane[2]*points[j].z()+plane[3]) < 0.05f) ++count;
+            }
+            if(count > bestCount) { best = plane; bestCount = count; }
+        }
+        if(bestCount >= 80) candidates.push_back(best);
+    }
+    if(candidates.size() < 2) return;
+
+    std::lock_guard<std::mutex> lock(mMutexManhattanPlanes);
+    for(size_t i = 0; i < candidates.size(); ++i)
+    {
+        bool orthogonal = false;
+        for(size_t j = 0; j < candidates.size(); ++j)
+            if(i != j && std::fabs(candidates[i][0]*candidates[j][0]+candidates[i][1]*candidates[j][1]+candidates[i][2]*candidates[j][2]) < 0.18f)
+                orthogonal = true;
+        if(!orthogonal) continue;
+        bool merged = false;
+        for(size_t j = 0; j < mvStableManhattanPlanes.size(); ++j)
+        {
+            const float dot = candidates[i][0]*mvStableManhattanPlanes[j][0] + candidates[i][1]*mvStableManhattanPlanes[j][1] + candidates[i][2]*mvStableManhattanPlanes[j][2];
+            if(std::fabs(dot) > 0.96f && std::fabs(candidates[i][3] - (dot < 0 ? -mvStableManhattanPlanes[j][3] : mvStableManhattanPlanes[j][3])) < 0.10f)
+            { mvStableManhattanPlanes[j] = candidates[i]; merged = true; break; }
+        }
+        if(!merged && mvStableManhattanPlanes.size() < 12) mvStableManhattanPlanes.push_back(candidates[i]);
+    }
 }
 
 void LocalMapping::EmptyQueue()
@@ -1529,6 +1601,12 @@ double LocalMapping::GetCurrKFTime()
 KeyFrame* LocalMapping::GetCurrKF()
 {
     return mpCurrentKeyFrame;
+}
+
+std::vector<cv::Vec4f> LocalMapping::GetStableManhattanPlanes() const
+{
+    std::lock_guard<std::mutex> lock(mMutexManhattanPlanes);
+    return mvStableManhattanPlanes;
 }
 
 } //namespace ORB_SLAM

@@ -79,6 +79,7 @@ public:
     bool IsInitializing();
     double GetCurrKFTime();
     KeyFrame* GetCurrKF();
+    std::vector<cv::Vec4f> GetStableManhattanPlanes() const;
 
     std::mutex mMutexImuInit;
 
@@ -134,6 +135,7 @@ protected:
     bool CheckNewKeyFrames();
     void ProcessNewKeyFrame();
     void CreateNewMapPoints();
+    void UpdateManhattanPlanes();
 
     void MapPointCulling();
     void SearchInNeighbors();
@@ -166,6 +168,8 @@ protected:
     KeyFrame* mpCurrentKeyFrame;
 
     std::list<MapPoint*> mlpRecentAddedMapPoints;
+    std::vector<cv::Vec4f> mvStableManhattanPlanes;
+    mutable std::mutex mMutexManhattanPlanes;
 
     std::mutex mMutexNewKFs;
 

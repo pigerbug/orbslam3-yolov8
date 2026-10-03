@@ -177,6 +177,11 @@ int DynamicFeatureFilter::ResultWaitMs() const
     return mConfig.resultWaitMs;
 }
 
+float DynamicFeatureFilter::PlaneDistance() const
+{
+    return mConfig.planeDistance;
+}
+
 bool DynamicFeatureFilter::IsDynamicForMapping(float probability, unsigned char immune) const
 {
     return !immune && probability >= mConfig.dynamicThreshold;
@@ -347,9 +352,9 @@ void DynamicFeatureFilter::Evaluate(const cv::Mat &dynamicMask, const cv::Mat &d
                 dynamicProbability[i] = mConfig.yoloPrior;
         }
 
-    // A Sampson term must be computed from validated feature correspondences.
-    // Frame keypoint indices are not temporal correspondences, so deliberately
-    // do not estimate F from index-aligned vectors here.
-    ApplyManhattanImmunity(depth, cameraMatrix, keys, dynamicProbability, manhattanImmune);
+    // Manhattan immunity is evaluated later, after Tracking has a pose and can
+    // query LocalMapping's world-coordinate persistent plane landmarks.
+    (void)depth;
+    (void)cameraMatrix;
 }
 }
