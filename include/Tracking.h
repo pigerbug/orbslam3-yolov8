@@ -270,6 +270,8 @@ protected:
     ORBextractor* mpORBextractorLeft, *mpORBextractorRight;
     ORBextractor* mpIniORBextractor;
     DynamicFeatureFilter mDynamicFilter;
+    bool mbLineTrackingEnabled = true;
+    int mnLineTrackingPointThreshold = 80;
     uint64_t mnDynamicInputFrameId;
 
     //BoW

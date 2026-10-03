@@ -76,6 +76,13 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         }
     }
 
+    cv::FileNode lineTrackingNode = dynamicSettings["LineTracking"];
+    if(!lineTrackingNode.empty())
+    {
+        if(!lineTrackingNode["enabled"].empty()) mbLineTrackingEnabled = static_cast<int>(lineTrackingNode["enabled"]) != 0;
+        if(!lineTrackingNode["maxStaticPoints"].empty()) mnLineTrackingPointThreshold = std::max(0, static_cast<int>(lineTrackingNode["maxStaticPoints"]));
+    }
+
     // Load camera parameters from settings file
     if(settings){
         newParameterLoader(settings);
@@ -1566,11 +1573,11 @@ void Tracking::RejectDynamicMapPointObservations()
 
 void Tracking::RefinePoseWithLines()
 {
-    if(!mpReferenceKF || mImGray.empty()) return;
+    if(!mbLineTrackingEnabled || !mpReferenceKF || mImGray.empty()) return;
     int staticPoints=0;
     for(size_t i=0;i<mCurrentFrame.mvpMapPoints.size();++i)
         if(mCurrentFrame.mvpMapPoints[i] && (i>=mCurrentFrame.mvbDynamicForMapping.size() || !mCurrentFrame.mvbDynamicForMapping[i])) ++staticPoints;
-    if(staticPoints>=80) return;
+    if(staticPoints>=mnLineTrackingPointThreshold) return;
     vector<cv::line_descriptor::KeyLine> refLines, currentLines;
     vector<MapLine*> refMapLines;
     cv::Mat refDesc,currentDesc;
@@ -1581,7 +1588,24 @@ void Tracking::RefinePoseWithLines()
     vector<MapLine*> matchedLines(currentLines.size(),static_cast<MapLine*>(NULL));
     for(size_t i=0;i<matches.size();++i) {
         const cv::DMatch &m=matches[i];
-        if(m.queryIdx>=0 && m.trainIdx>=0 && static_cast<size_t>(m.queryIdx)<matchedLines.size() && static_cast<size_t>(m.trainIdx)<refMapLines.size()) matchedLines[m.queryIdx]=refMapLines[m.trainIdx];
+        if(m.queryIdx<0 || m.trainIdx<0 || static_cast<size_t>(m.queryIdx)>=matchedLines.size() || static_cast<size_t>(m.trainIdx)>=refMapLines.size()) continue;
+        MapLine* line=refMapLines[m.trainIdx];
+        if(!line || line->isBad()) continue;
+        const Eigen::Vector3f startCamera=mCurrentFrame.GetPose()*line->GetStart();
+        const Eigen::Vector3f endCamera=mCurrentFrame.GetPose()*line->GetEnd();
+        if(startCamera.z()<=0.f || endCamera.z()<=0.f) continue;
+        const cv::Point2f startProjected=mCurrentFrame.mpCamera->project(startCamera);
+        const cv::Point2f endProjected=mCurrentFrame.mpCamera->project(endCamera);
+        const cv::line_descriptor::KeyLine &observed=currentLines[m.queryIdx];
+        const cv::Point2f observedDirection(observed.endPointX-observed.startPointX,observed.endPointY-observed.startPointY);
+        const cv::Point2f projectedDirection=endProjected-startProjected;
+        const float observedLength=cv::norm(observedDirection), projectedLength=cv::norm(projectedDirection);
+        if(observedLength<15.f || projectedLength<15.f) continue;
+        const float cosine=fabs(observedDirection.dot(projectedDirection)/(observedLength*projectedLength));
+        const float a=observed.startPointY-observed.endPointY, b=observed.endPointX-observed.startPointX;
+        const float midpointDistance=fabs(a*(startProjected.x+endProjected.x)*0.5f+b*(startProjected.y+endProjected.y)*0.5f+
+                                          observed.startPointX*observed.endPointY-observed.endPointX*observed.startPointY)/observedLength;
+        if(cosine>0.90f && midpointDistance<20.f) matchedLines[m.queryIdx]=line;
     }
     Optimizer::PoseOptimizationWithLines(&mCurrentFrame,currentLines,matchedLines);
 }
@@ -3078,6 +3102,7 @@ bool Tracking::TrackWithMotionModel()
     ApplyPersistentManhattanImmunity();
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
+    RefinePoseWithLines();
 
     // Discard outliers
     int nmatchesMap = 0;
@@ -3166,6 +3191,7 @@ bool Tracking::TrackLocalMap()
             }
         }
     }
+    RefinePoseWithLines();
 
     aux1 = 0, aux2 = 0;
     for(int i=0; i<mCurrentFrame.N; i++)

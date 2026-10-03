@@ -93,3 +93,8 @@ LineBA:
 # Stable Manhattan plane priors in RGB-D local BA. Set to 0 for the ablation.
 PlaneBA:
   enabled: 1
+
+# Extract and use current-frame lines only when static ORB support is sparse.
+LineTracking:
+  enabled: 1
+  maxStaticPoints: 80
