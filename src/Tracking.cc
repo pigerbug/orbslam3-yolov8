@@ -33,6 +33,9 @@
 
 #include <iostream>
 
+#include <algorithm>
+#include <cmath>
+#include <map>
 #include <mutex>
 #include <chrono>
 
@@ -74,6 +77,18 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             else
                 cerr << "YOLOv8 TensorRT engine could not be loaded: " << enginePath << endl;
         }
+    }
+
+    cv::FileNode shadowNode = dynamicSettings["GroundShadow"];
+    if(!shadowNode.empty())
+    {
+        if(!shadowNode["enabled"].empty()) mbGroundShadowEnabled = static_cast<int>(shadowNode["enabled"]) != 0;
+        if(!shadowNode["prior"].empty()) mGroundShadowPrior = static_cast<float>(shadowNode["prior"]);
+        if(!shadowNode["planeDistance"].empty()) mGroundShadowPlaneDistance = static_cast<float>(shadowNode["planeDistance"]);
+        if(!shadowNode["radius"].empty()) mGroundShadowRadius = static_cast<float>(shadowNode["radius"]);
+        if(!shadowNode["brightnessDiff"].empty()) mGroundShadowBrightnessDiff = static_cast<float>(shadowNode["brightnessDiff"]);
+        if(!shadowNode["textureStd"].empty()) mGroundShadowTextureStd = static_cast<float>(shadowNode["textureStd"]);
+        if(!shadowNode["geometryThreshold"].empty()) mGroundShadowGeometryThreshold = static_cast<float>(shadowNode["geometryThreshold"]);
     }
 
     cv::FileNode lineTrackingNode = dynamicSettings["LineTracking"];
@@ -1561,6 +1576,154 @@ void Tracking::ApplyPersistentManhattanImmunity()
             mCurrentFrame.mvDynamicProbability[i], mCurrentFrame.mvbManhattanImmune[i]);
 }
 
+void Tracking::ApplyGroundShadowProbability()
+{
+    if(!mbGroundShadowEnabled || !mCurrentFrame.HasPose() || mCurrentFrame.mImDepth.empty() ||
+       mCurrentFrame.mvDynamicBoxes.empty() || mImGray.empty() || !mpLocalMapper)
+        return;
+
+    const std::vector<cv::Vec4f> stablePlanes = mpLocalMapper->GetStableManhattanPlanes();
+    if(stablePlanes.empty()) return;
+    // In the camera frame a horizontal ground plane has a normal close to the
+    // image vertical axis. This rejects walls before contact-region fitting.
+    std::vector<cv::Vec4f> planes;
+    const Eigen::Matrix3f Rcw=mCurrentFrame.GetRwc().transpose();
+    for(size_t p=0; p<stablePlanes.size(); ++p)
+    {
+        const Eigen::Vector3f normalCamera=Rcw*Eigen::Vector3f(stablePlanes[p][0],stablePlanes[p][1],stablePlanes[p][2]);
+        if(std::fabs(normalCamera.y())>=0.70f) planes.push_back(stablePlanes[p]);
+    }
+    if(planes.empty()) return;
+
+    struct ContactRegion { Eigen::Vector3f center; Eigen::Vector3f direction; cv::Vec4f plane; };
+    std::vector<ContactRegion> contacts;
+    const float fx=mCurrentFrame.mK.at<float>(0,0), fy=mCurrentFrame.mK.at<float>(1,1);
+    const float cx=mCurrentFrame.mK.at<float>(0,2), cy=mCurrentFrame.mK.at<float>(1,2);
+    const Eigen::Matrix3f Rwc=mCurrentFrame.GetRwc();
+    const Eigen::Vector3f Ow=mCurrentFrame.GetOw();
+
+    // The person's bottom edge supplies a contact hypothesis.  It must agree
+    // with a stable plane before it can influence any surrounding feature.
+    for(size_t b=0; b<mCurrentFrame.mvDynamicBoxes.size(); ++b)
+    {
+        const cv::Rect2f &box=mCurrentFrame.mvDynamicBoxes[b].rect;
+        Eigen::Vector3f motionDirection=Eigen::Vector3f::Zero();
+        float closestBox=1e9f;
+        const cv::Point2f center(box.x+0.5f*box.width,box.y+0.5f*box.height);
+        for(size_t previousBox=0; previousBox<mLastFrame.mvDynamicBoxes.size(); ++previousBox)
+        {
+            const YoloBoundingBox &candidate=mLastFrame.mvDynamicBoxes[previousBox];
+            if(candidate.classId!=mCurrentFrame.mvDynamicBoxes[b].classId) continue;
+            const cv::Point2f previousCenter(candidate.rect.x+0.5f*candidate.rect.width,
+                                              candidate.rect.y+0.5f*candidate.rect.height);
+            const float distance=cv::norm(center-previousCenter);
+            if(distance<closestBox)
+            {
+                closestBox=distance;
+                motionDirection=Rwc*Eigen::Vector3f((center.x-previousCenter.x)/fx,
+                                                     (center.y-previousCenter.y)/fy,0.0f);
+            }
+        }
+        if(closestBox>2.0f*std::max(box.width,box.height)) motionDirection.setZero();
+        for(int sample=1; sample<=3; ++sample)
+        {
+            const int u=cvRound(box.x+box.width*0.25f*sample);
+            const int v=cvRound(box.y+box.height-1.0f);
+            if(u<0 || v<0 || u>=mCurrentFrame.mImDepth.cols || v>=mCurrentFrame.mImDepth.rows) continue;
+            std::vector<float> depthSamples;
+            for(int dy=-2; dy<=2; ++dy) for(int dx=-2; dx<=2; ++dx)
+            {
+                const int x=u+dx, y=v+dy;
+                if(x<0 || y<0 || x>=mCurrentFrame.mImDepth.cols || y>=mCurrentFrame.mImDepth.rows) continue;
+                const float z=mCurrentFrame.mImDepth.at<float>(y,x);
+                if(std::isfinite(z) && z>0.0f) depthSamples.push_back(z);
+            }
+            if(depthSamples.size()<3) continue;
+            std::nth_element(depthSamples.begin(),depthSamples.begin()+depthSamples.size()/2,depthSamples.end());
+            const float depth=depthSamples[depthSamples.size()/2];
+            const Eigen::Vector3f pointWorld=Rwc*Eigen::Vector3f((u-cx)*depth/fx,(v-cy)*depth/fy,depth)+Ow;
+            int closestPlane=-1;
+            float bestDistance=1e9f;
+            for(size_t p=0; p<planes.size(); ++p)
+            {
+                const float distance=std::fabs(planes[p][0]*pointWorld.x()+planes[p][1]*pointWorld.y()+
+                                                planes[p][2]*pointWorld.z()+planes[p][3]);
+                if(distance<bestDistance) { bestDistance=distance; closestPlane=static_cast<int>(p); }
+            }
+            if(closestPlane>=0 && bestDistance<=mGroundShadowPlaneDistance)
+            {
+                const Eigen::Vector3f normal(planes[closestPlane][0],planes[closestPlane][1],planes[closestPlane][2]);
+                Eigen::Vector3f direction=motionDirection-normal*normal.dot(motionDirection);
+                if(direction.norm()>1e-4f) direction.normalize();
+                else direction.setZero();
+                contacts.push_back({pointWorld,direction,planes[closestPlane]});
+            }
+        }
+    }
+    if(contacts.empty()) return;
+
+    // Intensity is compared only across a real MapPoint correspondence, not
+    // same-index keypoints.  This keeps the photometric cue conservative.
+    std::map<MapPoint*,size_t> previousObservations;
+    if(!mLastImGray.empty())
+        for(size_t i=0; i<mLastFrame.mvpMapPoints.size() && i<mLastFrame.mvKeysUn.size(); ++i)
+            if(mLastFrame.mvpMapPoints[i]) previousObservations[mLastFrame.mvpMapPoints[i]]=i;
+
+    const auto patchMeanStd=[](const cv::Mat &image, const cv::Point2f &pt, double &mean, double &stddev)->bool
+    {
+        const int radius=3, x=cvRound(pt.x), y=cvRound(pt.y);
+        if(x-radius<0 || y-radius<0 || x+radius>=image.cols || y+radius>=image.rows) return false;
+        cv::Scalar m,s;
+        cv::meanStdDev(image(cv::Rect(x-radius,y-radius,2*radius+1,2*radius+1)),m,s);
+        mean=m[0]; stddev=s[0];
+        return true;
+    };
+
+    for(size_t i=0; i<mCurrentFrame.mvDynamicProbability.size() && i<mCurrentFrame.mvKeysUn.size(); ++i)
+    {
+        if(i<mCurrentFrame.mvbManhattanImmune.size() && mCurrentFrame.mvbManhattanImmune[i]) continue;
+        Eigen::Vector3f pointWorld;
+        if(!mCurrentFrame.UnprojectStereo(static_cast<int>(i),pointWorld)) continue;
+
+        bool inInfluenceRegion=false;
+        for(size_t c=0; c<contacts.size(); ++c)
+        {
+            const cv::Vec4f &plane=contacts[c].plane;
+            const float signedDistance=plane[0]*pointWorld.x()+plane[1]*pointWorld.y()+plane[2]*pointWorld.z()+plane[3];
+            if(std::fabs(signedDistance)>mGroundShadowPlaneDistance) continue;
+            const Eigen::Vector3f normal(plane[0],plane[1],plane[2]);
+            const Eigen::Vector3f tangent=pointWorld-contacts[c].center-normal*normal.dot(pointWorld-contacts[c].center);
+            if(tangent.norm()<=mGroundShadowRadius) { inInfluenceRegion=true; break; }
+            // A matched detection box provides a weak motion direction.  Its
+            // forward lobe is deliberately short; without a match we retain
+            // only the circular contact region above.
+            if(contacts[c].direction.squaredNorm()>0.0f)
+            {
+                const float forward=tangent.dot(contacts[c].direction);
+                const float lateral=(tangent-contacts[c].direction*forward).norm();
+                if(forward>=0.0f && forward<=1.5f*mGroundShadowRadius && lateral<=0.5f*mGroundShadowRadius)
+                { inInfluenceRegion=true; break; }
+            }
+        }
+        if(!inInfluenceRegion) continue;
+
+        double currentMean,currentStd;
+        if(!patchMeanStd(mImGray,mCurrentFrame.mvKeysUn[i].pt,currentMean,currentStd) || currentStd>mGroundShadowTextureStd)
+            continue;
+        MapPoint *point=i<mCurrentFrame.mvpMapPoints.size()?mCurrentFrame.mvpMapPoints[i]:static_cast<MapPoint*>(NULL);
+        std::map<MapPoint*,size_t>::const_iterator previous=previousObservations.find(point);
+        if(!point || previous==previousObservations.end()) continue;
+        double previousMean,previousStd;
+        if(!patchMeanStd(mLastImGray,mLastFrame.mvKeysUn[previous->second].pt,previousMean,previousStd) ||
+           std::fabs(currentMean-previousMean)<mGroundShadowBrightnessDiff) continue;
+        if(mCurrentFrame.mvDynamicProbability[i]<mGroundShadowGeometryThreshold) continue;
+
+        mCurrentFrame.mvDynamicProbability[i]=std::max(mCurrentFrame.mvDynamicProbability[i],mGroundShadowPrior);
+        mCurrentFrame.mvbDynamicForMapping[i]=mDynamicFilter.IsDynamicForMapping(
+            mCurrentFrame.mvDynamicProbability[i],mCurrentFrame.mvbManhattanImmune[i]);
+    }
+}
+
 void Tracking::RejectDynamicMapPointObservations()
 {
     for(size_t i = 0; i < mCurrentFrame.mvpMapPoints.size(); ++i)
@@ -2095,6 +2258,7 @@ void Tracking::Track()
         if(mState!=OK) // If rightly initialized, mState=OK
         {
             mLastFrame = Frame(mCurrentFrame);
+            mLastImGray=mImGray.clone();
             return;
         }
 
@@ -2475,6 +2639,7 @@ void Tracking::Track()
             mCurrentFrame.mpReferenceKF = mpReferenceKF;
 
         mLastFrame = Frame(mCurrentFrame);
+        mLastImGray=mImGray.clone();
     }
 
 
@@ -2934,6 +3099,7 @@ bool Tracking::TrackReferenceKeyFrame()
     // cout << " TrackReferenceKeyFrame mLastFrame.mTcw:  " << mLastFrame.mTcw << endl;
     UpdateGeometricDynamicPrior();
     ApplyPersistentManhattanImmunity();
+    ApplyGroundShadowProbability();
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
     RefinePoseWithLines();
@@ -3102,6 +3268,7 @@ bool Tracking::TrackWithMotionModel()
     // Optimize frame pose with all matches
     UpdateGeometricDynamicPrior();
     ApplyPersistentManhattanImmunity();
+    ApplyGroundShadowProbability();
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
     RefinePoseWithLines();
@@ -3167,6 +3334,7 @@ bool Tracking::TrackLocalMap()
 
     UpdateGeometricDynamicPrior();
     ApplyPersistentManhattanImmunity();
+    ApplyGroundShadowProbability();
     RejectDynamicMapPointObservations();
     int inliers;
     if (!mpAtlas->isImuInitialized())

@@ -217,6 +217,7 @@ protected:
     void ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth = cv::Mat());
     void UpdateGeometricDynamicPrior();
     void ApplyPersistentManhattanImmunity();
+    void ApplyGroundShadowProbability();
     void RejectDynamicMapPointObservations();
     void RefinePoseWithLines();
 
@@ -270,6 +271,16 @@ protected:
     ORBextractor* mpORBextractorLeft, *mpORBextractorRight;
     ORBextractor* mpIniORBextractor;
     DynamicFeatureFilter mDynamicFilter;
+    // Evaluated in Tracking because it requires the current pose and the
+    // world-frame plane landmarks owned by LocalMapping.
+    bool mbGroundShadowEnabled = false;
+    float mGroundShadowPrior = 0.45f;
+    float mGroundShadowPlaneDistance = 0.08f;
+    float mGroundShadowRadius = 0.35f;
+    float mGroundShadowBrightnessDiff = 12.0f;
+    float mGroundShadowTextureStd = 18.0f;
+    float mGroundShadowGeometryThreshold = 0.10f;
+    cv::Mat mLastImGray;
     bool mbLineTrackingEnabled = true;
     int mnLineTrackingPointThreshold = 80;
     uint64_t mnDynamicInputFrameId;

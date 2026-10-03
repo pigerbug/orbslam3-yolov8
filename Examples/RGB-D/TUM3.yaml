@@ -77,6 +77,17 @@ DynamicFilter:
   yoloPrior: 0.70
   planeDistance: 0.05
 
+# Conservative ground-contact shadow probability; set enabled: 0 to restore
+# the pre-shadow baseline.
+GroundShadow:
+  enabled: 1
+  prior: 0.45
+  planeDistance: 0.08
+  radius: 0.35
+  brightnessDiff: 12.0
+  textureStd: 18.0
+  geometryThreshold: 0.10
+
 LineBA:
   enabled: 1
   minStaticPointEdges: 150
