@@ -380,8 +380,9 @@ public:
     // KeyPoints, stereo coordinate and descriptors (all associated by an index)
     const std::vector<cv::KeyPoint> mvKeys;
     const std::vector<cv::KeyPoint> mvKeysUn;
-    const std::vector<cv::line_descriptor::KeyLine> mvKeyLines;
-    const cv::Mat mLineDescriptors;
+    std::vector<cv::line_descriptor::KeyLine> mvKeyLines;
+    cv::Mat mLineDescriptors;
+    void SetLineFeatures(const std::vector<cv::line_descriptor::KeyLine> &lines, const cv::Mat &descriptors);
     std::vector<unsigned char> mvbDynamicForMapping;
     const std::vector<float> mvuRight; // negative value for monocular points
     const std::vector<float> mvDepth; // negative value for monocular points

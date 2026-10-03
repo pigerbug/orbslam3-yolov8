@@ -45,9 +45,10 @@ bool MakePlane(const Eigen::Vector3f &a, const Eigen::Vector3f &b, const Eigen::
 
 LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular, bool bInertial, const string &_strSeqName):
     mpSystem(pSys), mbMonocular(bMonocular), mbInertial(bInertial), mbResetRequested(false), mbResetRequestedActiveMap(false), mbFinishRequested(false), mbFinished(true), mpAtlas(pAtlas), bInitializing(false),
-    mbAbortBA(false), mbStopped(false), mbStopRequested(false), mbNotStop(false), mbAcceptKeyFrames(true),
+    mbAbortBA(false), mbStopped(false), mbStopRequested(false), mbNotStop(false), mbAcceptKeyFrames(true), mbStopLineWorker(false),
     mIdxInit(0), mScale(1.0), mInitSect(0), mbNotBA1(true), mbNotBA2(true), mIdxIteration(0), infoInertial(Eigen::MatrixXd::Zero(9,9))
 {
+    mLineWorker = std::thread(&LocalMapping::LineWorkerLoop, this);
     mnMatchesInliers = 0;
 
     mbBadImu = false;
@@ -62,6 +63,34 @@ LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular, 
     nLBA_abort = 0;
 #endif
 
+}
+
+void LocalMapping::SubmitLineExtraction(KeyFrame* pKF, const cv::Mat &image)
+{
+    if(!pKF || image.empty()) return;
+    std::lock_guard<std::mutex> lock(mMutexLineTasks);
+    mLineTasks.clear();
+    mLineTasks.push_back(LineTask{pKF, image.clone()});
+    mConditionLineTasks.notify_one();
+}
+
+void LocalMapping::LineWorkerLoop()
+{
+    while(true)
+    {
+        LineTask task;
+        {
+            std::unique_lock<std::mutex> lock(mMutexLineTasks);
+            mConditionLineTasks.wait(lock, [this]{ return mbStopLineWorker || !mLineTasks.empty(); });
+            if(mbStopLineWorker) return;
+            task = mLineTasks.back();
+            mLineTasks.clear();
+        }
+        std::vector<cv::line_descriptor::KeyLine> lines;
+        cv::Mat descriptors;
+        LineExtractor::Extract(task.image, lines, descriptors);
+        task.keyFrame->SetLineFeatures(lines, descriptors);
+    }
 }
 
 void LocalMapping::SetLoopCloser(LoopClosing* pLoopCloser)
@@ -291,6 +320,12 @@ void LocalMapping::Run()
         usleep(3000);
     }
 
+    {
+        std::lock_guard<std::mutex> lock(mMutexLineTasks);
+        mbStopLineWorker = true;
+    }
+    mConditionLineTasks.notify_all();
+    if(mLineWorker.joinable()) mLineWorker.join();
     SetFinish();
 }
 

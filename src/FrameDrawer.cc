@@ -129,6 +129,15 @@ cv::Mat FrameDrawer::DrawFrame(float imageScale)
         }
     }
 
+    static double lastTime = cv::getTickCount() / cv::getTickFrequency();
+    static double fps = 0.0;
+    const double now = cv::getTickCount() / cv::getTickFrequency();
+    const double dt = now - lastTime;
+    if(dt > 1e-6) fps = 0.9 * fps + 0.1 / dt;
+    lastTime = now;
+    cv::putText(im, cv::format("FPS: %.1f", fps), cv::Point(10, 25),
+                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
+
     //Draw
     if(state==Tracking::NOT_INITIALIZED)
     {

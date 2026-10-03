@@ -28,6 +28,9 @@
 #include "Settings.h"
 
 #include <mutex>
+#include <thread>
+#include <condition_variable>
+#include <deque>
 
 
 namespace ORB_SLAM3
@@ -52,6 +55,7 @@ public:
     void Run();
 
     void InsertKeyFrame(KeyFrame* pKF);
+    void SubmitLineExtraction(KeyFrame* pKF, const cv::Mat &image);
     void EmptyQueue();
 
     // Thread Synch
@@ -136,6 +140,7 @@ protected:
     void ProcessNewKeyFrame();
     void CreateNewMapPoints();
     void UpdateManhattanPlanes();
+    void LineWorkerLoop();
 
     void MapPointCulling();
     void SearchInNeighbors();
@@ -168,6 +173,12 @@ protected:
     KeyFrame* mpCurrentKeyFrame;
 
     std::list<MapPoint*> mlpRecentAddedMapPoints;
+    struct LineTask { KeyFrame* keyFrame; cv::Mat image; };
+    std::deque<LineTask> mLineTasks;
+    std::thread mLineWorker;
+    std::mutex mMutexLineTasks;
+    std::condition_variable mConditionLineTasks;
+    bool mbStopLineWorker;
     std::vector<cv::Vec4f> mvStableManhattanPlanes;
     mutable std::mutex mMutexManhattanPlanes;
 

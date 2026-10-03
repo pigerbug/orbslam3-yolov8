@@ -106,6 +106,13 @@ void KeyFrame::ComputeBoW()
     }
 }
 
+void KeyFrame::SetLineFeatures(const std::vector<cv::line_descriptor::KeyLine> &lines, const cv::Mat &descriptors)
+{
+    unique_lock<mutex> lock(mMutexFeatures);
+    mvKeyLines = lines;
+    mLineDescriptors = descriptors.clone();
+}
+
 void KeyFrame::SetPose(const Sophus::SE3f &Tcw)
 {
     unique_lock<mutex> lock(mMutexPose);
