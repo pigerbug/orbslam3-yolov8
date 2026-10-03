@@ -43,6 +43,7 @@ namespace ORB_SLAM3
 {
 
 class Map;
+class MapLine;
 class MapPoint;
 class Frame;
 class KeyFrameDatabase;
@@ -383,6 +384,8 @@ public:
     std::vector<cv::line_descriptor::KeyLine> mvKeyLines;
     cv::Mat mLineDescriptors;
     void SetLineFeatures(const std::vector<cv::line_descriptor::KeyLine> &lines, const cv::Mat &descriptors);
+    void AddMapLine(MapLine* pML, const size_t &idx);
+    MapLine* GetMapLine(const size_t &idx);
     std::vector<unsigned char> mvbDynamicForMapping;
     const std::vector<float> mvuRight; // negative value for monocular points
     const std::vector<float> mvDepth; // negative value for monocular points
@@ -452,6 +455,7 @@ protected:
 
     // MapPoints associated to keypoints
     std::vector<MapPoint*> mvpMapPoints;
+    std::vector<MapLine*> mvpMapLines;
     // For save relation without pointer, this is necessary for save/load function
     std::vector<long long int> mvBackupMapPointsId;
 

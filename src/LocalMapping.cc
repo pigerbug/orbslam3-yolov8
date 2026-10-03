@@ -23,6 +23,8 @@
 #include "Optimizer.h"
 #include "Converter.h"
 #include "GeometricTools.h"
+#include "LineMatcher.h"
+#include "MapLine.h"
 
 #include<mutex>
 #include<chrono>
@@ -39,6 +41,22 @@ bool MakePlane(const Eigen::Vector3f &a, const Eigen::Vector3f &b, const Eigen::
     if(length < 1e-5f) return false;
     n /= length;
     plane = cv::Vec4f(n.x(), n.y(), n.z(), -n.dot(a));
+    return true;
+}
+
+bool BackProjectLineEndpoint(KeyFrame* kf, float u, float v, Eigen::Vector3f &world)
+{
+    if(kf->mImDepth.empty()) return false;
+    const int x = cvRound(u), y = cvRound(v);
+    if(x < 1 || y < 1 || x >= kf->mImDepth.cols-1 || y >= kf->mImDepth.rows-1) return false;
+    std::vector<float> samples;
+    for(int dy=-1; dy<=1; ++dy) for(int dx=-1; dx<=1; ++dx) {
+        const float z=kf->mImDepth.at<float>(y+dy,x+dx); if(std::isfinite(z) && z>0.f) samples.push_back(z); }
+    if(samples.size()<3) return false;
+    std::nth_element(samples.begin(),samples.begin()+samples.size()/2,samples.end());
+    const float z=samples[samples.size()/2];
+    const Eigen::Vector3f camera((u-kf->cx)*z*kf->invfx,(v-kf->cy)*z*kf->invfy,z);
+    world = kf->GetPoseInverse()*camera;
     return true;
 }
 }
@@ -90,6 +108,32 @@ void LocalMapping::LineWorkerLoop()
         cv::Mat descriptors;
         LineExtractor::Extract(task.image, lines, descriptors);
         task.keyFrame->SetLineFeatures(lines, descriptors);
+        CreateMapLines(task.keyFrame);
+    }
+}
+
+void LocalMapping::CreateMapLines(KeyFrame* pKF)
+{
+    if(!pKF || pKF->mLineDescriptors.empty() || pKF->mImDepth.empty()) return;
+    const std::vector<KeyFrame*> neighbors=pKF->GetBestCovisibilityKeyFrames(5);
+    for(size_t n=0;n<neighbors.size();++n)
+    {
+        KeyFrame* other=neighbors[n];
+        if(!other || other->mLineDescriptors.empty() || other->mImDepth.empty()) continue;
+        std::vector<cv::DMatch> matches; LineMatcher::Match(pKF->mLineDescriptors,other->mLineDescriptors,matches);
+        for(size_t m=0;m<matches.size();++m)
+        {
+            const size_t a=matches[m].queryIdx,b=matches[m].trainIdx;
+            if(a>=pKF->mvKeyLines.size() || b>=other->mvKeyLines.size() || pKF->GetMapLine(a) || other->GetMapLine(b)) continue;
+            Eigen::Vector3f start,end;
+            const cv::line_descriptor::KeyLine &line=pKF->mvKeyLines[a];
+            if(!BackProjectLineEndpoint(pKF,line.startPointX,line.startPointY,start) ||
+               !BackProjectLineEndpoint(pKF,line.endPointX,line.endPointY,end) || (end-start).norm()<0.05f) continue;
+            MapLine* mapLine=new MapLine(start,end,mpAtlas->GetCurrentMap());
+            mapLine->AddObservation(pKF,a); mapLine->AddObservation(other,b);
+            pKF->AddMapLine(mapLine,a); other->AddMapLine(mapLine,b);
+            mpAtlas->GetCurrentMap()->AddMapLine(mapLine);
+        }
     }
 }
 

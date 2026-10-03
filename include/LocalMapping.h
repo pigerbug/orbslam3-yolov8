@@ -141,6 +141,7 @@ protected:
     void CreateNewMapPoints();
     void UpdateManhattanPlanes();
     void LineWorkerLoop();
+    void CreateMapLines(KeyFrame* pKF);
 
     void MapPointCulling();
     void SearchInNeighbors();

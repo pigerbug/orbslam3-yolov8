@@ -111,6 +111,19 @@ void KeyFrame::SetLineFeatures(const std::vector<cv::line_descriptor::KeyLine> &
     unique_lock<mutex> lock(mMutexFeatures);
     mvKeyLines = lines;
     mLineDescriptors = descriptors.clone();
+    mvpMapLines.assign(lines.size(), static_cast<MapLine*>(NULL));
+}
+
+void KeyFrame::AddMapLine(MapLine* pML, const size_t &idx)
+{
+    unique_lock<mutex> lock(mMutexFeatures);
+    if(idx < mvpMapLines.size()) mvpMapLines[idx] = pML;
+}
+
+MapLine* KeyFrame::GetMapLine(const size_t &idx)
+{
+    unique_lock<mutex> lock(mMutexFeatures);
+    return idx < mvpMapLines.size() ? mvpMapLines[idx] : static_cast<MapLine*>(NULL);
 }
 
 void KeyFrame::SetPose(const Sophus::SE3f &Tcw)

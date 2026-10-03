@@ -136,11 +136,13 @@ src/Settings.cc
 src/DynamicFeatureFilter.cc
 src/YoloDetector.cc
 src/LineExtractor.cc
+src/LineMatcher.cc
 include/System.h
 include/Tracking.h
 include/YoloDetector.h
 include/DynamicFeatureFilter.h
 include/LineExtractor.h
+include/LineMatcher.h
 include/LocalMapping.h
 include/LoopClosing.h
 include/ORBextractor.h
