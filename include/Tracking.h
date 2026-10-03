@@ -218,6 +218,7 @@ protected:
     void UpdateGeometricDynamicPrior();
     void ApplyPersistentManhattanImmunity();
     void RejectDynamicMapPointObservations();
+    void RefinePoseWithLines();
 
     bool Relocalization();
 

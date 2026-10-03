@@ -1286,6 +1286,33 @@ int Optimizer::PoseOptimization(Frame *pFrame)
     return nInitialCorrespondences-nBad;
 }
 
+int Optimizer::PoseOptimizationWithLines(Frame *pFrame, const vector<cv::line_descriptor::KeyLine> &lines,
+                                         const vector<MapLine*> &mapLines)
+{
+    if(lines.size()!=mapLines.size()) return 0;
+    g2o::SparseOptimizer optimizer;
+    g2o::BlockSolver_6_3::LinearSolverType *linearSolver = new g2o::LinearSolverDense<g2o::BlockSolver_6_3::PoseMatrixType>();
+    optimizer.setAlgorithm(new g2o::OptimizationAlgorithmLevenberg(new g2o::BlockSolver_6_3(linearSolver)));
+    g2o::VertexSE3Expmap *pose = new g2o::VertexSE3Expmap();
+    Sophus::SE3f Tcw=pFrame->GetPose(); pose->setEstimate(g2o::SE3Quat(Tcw.unit_quaternion().cast<double>(),Tcw.translation().cast<double>())); pose->setId(0); optimizer.addVertex(pose);
+    int nextId=1, edges=0;
+    for(size_t i=0;i<lines.size();++i) {
+        MapLine* line=mapLines[i]; if(!line || line->isBad()) continue;
+        const double a=lines[i].startPointY-lines[i].endPointY, b=lines[i].endPointX-lines[i].startPointX, n=sqrt(a*a+b*b); if(n<1e-9) continue;
+        Eigen::Vector3d obs(a/n,b/n,(lines[i].startPointX*lines[i].endPointY-lines[i].endPointX*lines[i].startPointY)/n);
+        const Eigen::Vector3f endpoints[2]={line->GetStart(),line->GetEnd()};
+        for(int k=0;k<2;++k) {
+            g2o::VertexSBAPointXYZ* point=new g2o::VertexSBAPointXYZ(); point->setId(nextId++); point->setEstimate(endpoints[k].cast<double>()); point->setFixed(true); optimizer.addVertex(point);
+            EdgeSE3LinePoint* e=new EdgeSE3LinePoint(); e->setVertex(0,point); e->setVertex(1,pose); e->setMeasurement(obs); e->setInformation(Eigen::Matrix<double,1,1>::Identity()); e->fx=pFrame->fx; e->fy=pFrame->fy; e->cx=pFrame->cx; e->cy=pFrame->cy;
+            g2o::RobustKernelHuber* rk=new g2o::RobustKernelHuber; e->setRobustKernel(rk); rk->setDelta(sqrt(3.841)); optimizer.addEdge(e); ++edges;
+        }
+    }
+    if(edges<8) return 0;
+    optimizer.initializeOptimization(); optimizer.optimize(5);
+    g2o::SE3Quat result=pose->estimate(); pFrame->SetPose(Sophus::SE3f(result.rotation().cast<float>(),result.translation().cast<float>()));
+    return edges/2;
+}
+
 void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap, int& num_fixedKF, int& num_OptKF, int& num_MPs, int& num_edges,
                                       const vector<cv::Vec4f> &stablePlanes)
 {

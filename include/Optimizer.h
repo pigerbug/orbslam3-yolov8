@@ -63,6 +63,8 @@ public:
                                       const std::vector<cv::Vec4f> &stablePlanes=std::vector<cv::Vec4f>());
 
     int static PoseOptimization(Frame* pFrame);
+    int static PoseOptimizationWithLines(Frame* pFrame, const std::vector<cv::line_descriptor::KeyLine> &lines,
+                                         const std::vector<MapLine*> &mapLines);
     int static PoseInertialOptimizationLastKeyFrame(Frame* pFrame, bool bRecInit = false);
     int static PoseInertialOptimizationLastFrame(Frame *pFrame, bool bRecInit = false);
 

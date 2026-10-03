@@ -23,6 +23,8 @@
 #include "FrameDrawer.h"
 #include "Converter.h"
 #include "G2oTypes.h"
+#include "LineMatcher.h"
+#include "MapLine.h"
 #include "Optimizer.h"
 #include "Pinhole.h"
 #include "KannalaBrandt8.h"
@@ -1562,6 +1564,28 @@ void Tracking::RejectDynamicMapPointObservations()
         }
 }
 
+void Tracking::RefinePoseWithLines()
+{
+    if(!mpReferenceKF || mImGray.empty()) return;
+    int staticPoints=0;
+    for(size_t i=0;i<mCurrentFrame.mvpMapPoints.size();++i)
+        if(mCurrentFrame.mvpMapPoints[i] && (i>=mCurrentFrame.mvbDynamicForMapping.size() || !mCurrentFrame.mvbDynamicForMapping[i])) ++staticPoints;
+    if(staticPoints>=80) return;
+    vector<cv::line_descriptor::KeyLine> refLines, currentLines;
+    vector<MapLine*> refMapLines;
+    cv::Mat refDesc,currentDesc;
+    mpReferenceKF->GetLineFeatures(refLines,refDesc,refMapLines);
+    if(refDesc.empty() || refLines.size()!=refMapLines.size()) return;
+    LineExtractor::Extract(mImGray,currentLines,currentDesc);
+    vector<cv::DMatch> matches; LineMatcher::Match(currentDesc,refDesc,matches);
+    vector<MapLine*> matchedLines(currentLines.size(),static_cast<MapLine*>(NULL));
+    for(size_t i=0;i<matches.size();++i) {
+        const cv::DMatch &m=matches[i];
+        if(m.queryIdx>=0 && m.trainIdx>=0 && static_cast<size_t>(m.queryIdx)<matchedLines.size() && static_cast<size_t>(m.trainIdx)<refMapLines.size()) matchedLines[m.queryIdx]=refMapLines[m.trainIdx];
+    }
+    Optimizer::PoseOptimizationWithLines(&mCurrentFrame,currentLines,matchedLines);
+}
+
 
 
 Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRectRight, const double &timestamp, string filename)
@@ -2886,6 +2910,7 @@ bool Tracking::TrackReferenceKeyFrame()
     ApplyPersistentManhattanImmunity();
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
+    RefinePoseWithLines();
 
     // Discard outliers
     int nmatchesMap = 0;
