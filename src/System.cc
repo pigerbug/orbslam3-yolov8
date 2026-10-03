@@ -20,6 +20,7 @@
 
 #include "System.h"
 #include "Converter.h"
+#include "Optimizer.h"
 #include <thread>
 #include <pangolin/pangolin.h>
 #include <iomanip>
@@ -190,6 +191,20 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     cout << "Seq. Name: " << strSequence << endl;
     mpTracker = new Tracking(this, mpVocabulary, mpFrameDrawer, mpMapDrawer,
                              mpAtlas, mpKeyFrameDatabase, strSettingsFile, mSensor, settings_, strSequence);
+
+    // Extension parameters are read directly so legacy and Settings-based
+    // YAML files both keep working without changing the core Settings schema.
+    bool lineBAEnabled = true;
+    int lineBAMinStaticPointEdges = 150;
+    cv::FileNode lineBANode = fsSettings["LineBA"];
+    if(!lineBANode.empty())
+    {
+        if(!lineBANode["enabled"].empty()) lineBAEnabled = static_cast<int>(lineBANode["enabled"]) != 0;
+        if(!lineBANode["minStaticPointEdges"].empty()) lineBAMinStaticPointEdges = static_cast<int>(lineBANode["minStaticPointEdges"]);
+    }
+    Optimizer::SetLineBAParameters(lineBAEnabled, lineBAMinStaticPointEdges);
+    cout << "Line BA: " << (lineBAEnabled ? "adaptive" : "disabled")
+         << ", min static point edges=" << lineBAMinStaticPointEdges << endl;
 
     //Initialize the Local Mapping thread and launch
     mpLocalMapper = new LocalMapping(this, mpAtlas, mSensor==MONOCULAR || mSensor==IMU_MONOCULAR,

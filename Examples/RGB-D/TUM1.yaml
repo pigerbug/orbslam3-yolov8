@@ -82,3 +82,10 @@ DynamicFilter:
 
   # 仅 RGB-D 有效，单位米；落在正交平面上的可疑点可被豁免
   planeDistance: 0.05
+
+# Point-line BA is activated only when the local/static point graph has fewer
+# than this many point reprojection edges. This protects textured sequences
+# from noisy LBD line matches while preserving support in low-texture areas.
+LineBA:
+  enabled: 1
+  minStaticPointEdges: 150

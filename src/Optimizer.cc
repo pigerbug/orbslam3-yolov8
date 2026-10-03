@@ -47,6 +47,23 @@
 
 namespace ORB_SLAM3
 {
+namespace
+{
+bool gLineBAEnabled = true;
+int gLineBAMinStaticPointEdges = 150;
+}
+
+void Optimizer::SetLineBAParameters(bool enabled, int minStaticPointEdges)
+{
+    gLineBAEnabled = enabled;
+    gLineBAMinStaticPointEdges = std::max(0, minStaticPointEdges);
+}
+
+bool Optimizer::UseLineBA(int staticPointEdges)
+{
+    return gLineBAEnabled && staticPointEdges < gLineBAMinStaticPointEdges;
+}
+
 static double DynamicStaticWeight(const Frame *frame, const size_t index)
 {
     if(index >= frame->mvDynamicProbability.size()) return 1.0;
@@ -314,6 +331,8 @@ void Optimizer::BundleAdjustment(const vector<KeyFrame *> &vpKFs, const vector<M
     vector<MapLine*> vpOptimizedLines;
     vector<pair<unsigned long,unsigned long> > vLineVertexIds;
     const float thHuberLine = sqrt(3.841f);
+    const int staticPointEdges = static_cast<int>(vpEdgesMono.size()+vpEdgesStereo.size()+vpEdgesBody.size());
+    if(UseLineBA(staticPointEdges))
     for(size_t i=0; i<vpML.size(); ++i)
     {
         MapLine* pML = vpML[i];
@@ -1589,6 +1608,8 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
     vector<MapLine*> vpEdgeMapLine;
 
     const float thHuberLine = sqrt(3.841f); // one-dimensional, 95% chi-square
+    const int staticPointEdges = static_cast<int>(vpEdgesMono.size()+vpEdgesStereo.size()+vpEdgesBody.size());
+    if(UseLineBA(staticPointEdges))
     for(list<MapLine*>::iterator lit=lLocalMapLines.begin(), lend=lLocalMapLines.end(); lit!=lend; ++lit)
     {
         MapLine* pML = *lit;

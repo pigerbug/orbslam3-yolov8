@@ -47,6 +47,10 @@ class Optimizer
 {
 public:
 
+    // Line residuals are useful when static point support is sparse, but can
+    // otherwise inject LBD/depth endpoint noise into a well-constrained BA.
+    static void SetLineBAParameters(bool enabled, int minStaticPointEdges);
+
     void static BundleAdjustment(const std::vector<KeyFrame*> &vpKF, const std::vector<MapPoint*> &vpMP,
                                  int nIterations = 5, bool *pbStopFlag=NULL, const unsigned long nLoopKF=0,
                                  const bool bRobust = true);
@@ -99,6 +103,9 @@ public:
     void static InertialOptimization(Map *pMap, Eigen::Matrix3d &Rwg, double &scale);
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+
+private:
+    static bool UseLineBA(int staticPointEdges);
 };
 
 } //namespace ORB_SLAM3
