@@ -51,6 +51,7 @@ namespace
 {
 bool gLineBAEnabled = true;
 int gLineBAMinStaticPointEdges = 150;
+bool gPlaneBAEnabled = true;
 }
 
 void Optimizer::SetLineBAParameters(bool enabled, int minStaticPointEdges)
@@ -62,6 +63,16 @@ void Optimizer::SetLineBAParameters(bool enabled, int minStaticPointEdges)
 bool Optimizer::UseLineBA(int staticPointEdges)
 {
     return gLineBAEnabled && staticPointEdges < gLineBAMinStaticPointEdges;
+}
+
+void Optimizer::SetPlaneBAEnabled(bool enabled)
+{
+    gPlaneBAEnabled = enabled;
+}
+
+bool Optimizer::UsePlaneBA()
+{
+    return gPlaneBAEnabled;
 }
 
 static double DynamicStaticWeight(const Frame *frame, const size_t index)
@@ -1275,7 +1286,8 @@ int Optimizer::PoseOptimization(Frame *pFrame)
     return nInitialCorrespondences-nBad;
 }
 
-void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap, int& num_fixedKF, int& num_OptKF, int& num_MPs, int& num_edges)
+void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap, int& num_fixedKF, int& num_OptKF, int& num_MPs, int& num_edges,
+                                      const vector<cv::Vec4f> &stablePlanes)
 {
     // Local KeyFrames: First Breath Search from Current Keyframe
     list<KeyFrame*> lLocalKeyFrames;
@@ -1590,6 +1602,47 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
                     }
                 }
             }
+        }
+    }
+
+    // Stable planes are map-level structural landmarks.  Add a robust point-
+    // to-plane residual only for already compatible static MapPoints; this
+    // keeps Manhattan structure in the local BA without over-constraining
+    // object boundaries or recently changing geometry.
+    const float planeAssociationDistance = 0.04f;
+    const float planeSigma = 0.03f;
+    const float thHuberPlane = sqrt(3.841f);
+    if(UsePlaneBA() && stablePlanes.size() >= 2)
+    {
+        for(list<MapPoint*>::iterator lit=lLocalMapPoints.begin(), lend=lLocalMapPoints.end(); lit!=lend; ++lit)
+        {
+            MapPoint* pMP = *lit;
+            g2o::VertexSBAPointXYZ* vPoint = static_cast<g2o::VertexSBAPointXYZ*>(optimizer.vertex(pMP->mnId+maxKFid+1));
+            if(!vPoint) continue;
+            const Eigen::Vector3f point = pMP->GetWorldPos();
+            int bestPlane = -1;
+            float bestDistance = planeAssociationDistance;
+            for(size_t i=0; i<stablePlanes.size(); ++i)
+            {
+                const cv::Vec4f &plane = stablePlanes[i];
+                const float normalLength = sqrt(plane[0]*plane[0]+plane[1]*plane[1]+plane[2]*plane[2]);
+                if(normalLength < 1e-6f) continue;
+                const float distance = fabs(plane[0]*point.x()+plane[1]*point.y()+plane[2]*point.z()+plane[3]) / normalLength;
+                if(distance < bestDistance) { bestDistance=distance; bestPlane=static_cast<int>(i); }
+            }
+            if(bestPlane < 0) continue;
+            const cv::Vec4f &plane = stablePlanes[bestPlane];
+            const double normalLength = sqrt(plane[0]*plane[0]+plane[1]*plane[1]+plane[2]*plane[2]);
+            ORB_SLAM3::EdgePlanePoint* e = new ORB_SLAM3::EdgePlanePoint();
+            e->setVertex(0, vPoint);
+            e->setMeasurement(0.);
+            e->normal = Eigen::Vector3d(plane[0],plane[1],plane[2])/normalLength;
+            e->distance = plane[3]/normalLength;
+            e->setInformation(Eigen::Matrix<double,1,1>::Identity()/(planeSigma*planeSigma));
+            g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+            e->setRobustKernel(rk); rk->setDelta(thHuberPlane);
+            optimizer.addEdge(e);
+            ++nEdges;
         }
     }
 

@@ -191,6 +191,29 @@ public:
     }
 };
 
+// Fixed structural-plane landmark residual.  The plane is represented in
+// world coordinates as n.dot(Xw)+d=0 and is only attached to points already
+// close to a stable Manhattan plane, so it regularizes BA without pulling
+// arbitrary scene points onto a plane.
+class EdgePlanePoint: public g2o::BaseUnaryEdge<1, double, g2o::VertexSBAPointXYZ>{
+public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    bool read(std::istream& is) { return false; }
+    bool write(std::ostream& os) const { return false; }
+
+    void computeError()
+    {
+        const g2o::VertexSBAPointXYZ* point = static_cast<const g2o::VertexSBAPointXYZ*>(_vertices[0]);
+        _error[0] = normal.dot(point->estimate()) + distance - _measurement;
+    }
+
+    void linearizeOplus() { _jacobianOplusXi = normal.transpose(); }
+
+    Eigen::Vector3d normal = Eigen::Vector3d::UnitZ();
+    double distance = 0.;
+};
+
 class  EdgeSE3ProjectXYZToBody: public  g2o::BaseBinaryEdge<2, Eigen::Vector2d, g2o::VertexSBAPointXYZ, g2o::VertexSE3Expmap>{
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW

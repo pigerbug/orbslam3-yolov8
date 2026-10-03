@@ -50,6 +50,7 @@ public:
     // Line residuals are useful when static point support is sparse, but can
     // otherwise inject LBD/depth endpoint noise into a well-constrained BA.
     static void SetLineBAParameters(bool enabled, int minStaticPointEdges);
+    static void SetPlaneBAEnabled(bool enabled);
 
     void static BundleAdjustment(const std::vector<KeyFrame*> &vpKF, const std::vector<MapPoint*> &vpMP,
                                  int nIterations = 5, bool *pbStopFlag=NULL, const unsigned long nLoopKF=0,
@@ -58,7 +59,8 @@ public:
                                        const unsigned long nLoopKF=0, const bool bRobust = true);
     void static FullInertialBA(Map *pMap, int its, const bool bFixLocal=false, const unsigned long nLoopKF=0, bool *pbStopFlag=NULL, bool bInit=false, float priorG = 1e2, float priorA=1e6, Eigen::VectorXd *vSingVal = NULL, bool *bHess=NULL);
 
-    void static LocalBundleAdjustment(KeyFrame* pKF, bool *pbStopFlag, Map *pMap, int& num_fixedKF, int& num_OptKF, int& num_MPs, int& num_edges);
+    void static LocalBundleAdjustment(KeyFrame* pKF, bool *pbStopFlag, Map *pMap, int& num_fixedKF, int& num_OptKF, int& num_MPs, int& num_edges,
+                                      const std::vector<cv::Vec4f> &stablePlanes=std::vector<cv::Vec4f>());
 
     int static PoseOptimization(Frame* pFrame);
     int static PoseInertialOptimizationLastKeyFrame(Frame* pFrame, bool bRecInit = false);
@@ -106,6 +108,7 @@ public:
 
 private:
     static bool UseLineBA(int staticPointEdges);
+    static bool UsePlaneBA();
 };
 
 } //namespace ORB_SLAM3

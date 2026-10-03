@@ -89,3 +89,7 @@ DynamicFilter:
 LineBA:
   enabled: 1
   minStaticPointEdges: 150
+
+# Stable Manhattan plane priors in RGB-D local BA. Set to 0 for the ablation.
+PlaneBA:
+  enabled: 1

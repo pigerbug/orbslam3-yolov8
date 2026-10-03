@@ -206,6 +206,13 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     cout << "Line BA: " << (lineBAEnabled ? "adaptive" : "disabled")
          << ", min static point edges=" << lineBAMinStaticPointEdges << endl;
 
+    bool planeBAEnabled = true;
+    cv::FileNode planeBANode = fsSettings["PlaneBA"];
+    if(!planeBANode.empty() && !planeBANode["enabled"].empty())
+        planeBAEnabled = static_cast<int>(planeBANode["enabled"]) != 0;
+    Optimizer::SetPlaneBAEnabled(planeBAEnabled);
+    cout << "Plane BA: " << (planeBAEnabled ? "enabled" : "disabled") << endl;
+
     //Initialize the Local Mapping thread and launch
     mpLocalMapper = new LocalMapping(this, mpAtlas, mSensor==MONOCULAR || mSensor==IMU_MONOCULAR,
                                      mSensor==IMU_MONOCULAR || mSensor==IMU_STEREO || mSensor==IMU_RGBD, strSequence);
