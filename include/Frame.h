@@ -33,6 +33,7 @@
 #include "Converter.h"
 #include "Settings.h"
 #include "YoloDetector.h"
+#include "LineExtractor.h"
 
 #include <mutex>
 #include <opencv2/opencv.hpp>
@@ -228,6 +229,8 @@ public:
     // In the stereo case, mvKeysUn is redundant as images must be rectified.
     // In the RGB-D case, RGB images can be distorted.
     std::vector<cv::KeyPoint> mvKeys, mvKeysRight;
+    std::vector<cv::line_descriptor::KeyLine> mvKeyLines;
+    cv::Mat mLineDescriptors;
     std::vector<cv::KeyPoint> mvKeysUn;
 
     std::vector<float> mvDynamicProbability;
