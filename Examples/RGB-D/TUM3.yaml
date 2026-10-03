@@ -68,3 +68,24 @@ Viewer.ViewpointY: -0.7
 Viewer.ViewpointZ: -1.8
 Viewer.ViewpointF: 500.0
 
+# Dynamic-scene front end. Keep these extension parameters separate from the
+# official fr3 calibration above.
+DynamicFilter:
+  enabled: 1
+  engine: "/home/nan/workspace/orbslam3-yolov8/models/yolov8n.engine"
+  hardMask: 1
+  yoloPrior: 0.70
+  planeDistance: 0.05
+
+LineBA:
+  enabled: 1
+  minStaticPointEdges: 150
+
+PlaneBA:
+  enabled: 1
+
+# Disabled for this textured TUM sequence because the ablation increased ATE.
+LineTracking:
+  enabled: 0
+  maxStaticPoints: 80
+

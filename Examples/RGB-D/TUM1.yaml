@@ -96,5 +96,5 @@ PlaneBA:
 
 # Extract and use current-frame lines only when static ORB support is sparse.
 LineTracking:
-  enabled: 1
+  enabled: 0
   maxStaticPoints: 80
