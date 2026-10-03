@@ -1594,8 +1594,10 @@ void Tracking::RefinePoseWithLines()
         const Eigen::Vector3f startCamera=mCurrentFrame.GetPose()*line->GetStart();
         const Eigen::Vector3f endCamera=mCurrentFrame.GetPose()*line->GetEnd();
         if(startCamera.z()<=0.f || endCamera.z()<=0.f) continue;
-        const cv::Point2f startProjected=mCurrentFrame.mpCamera->project(startCamera);
-        const cv::Point2f endProjected=mCurrentFrame.mpCamera->project(endCamera);
+        const Eigen::Vector2f startProjectedEigen=mCurrentFrame.mpCamera->project(startCamera);
+        const Eigen::Vector2f endProjectedEigen=mCurrentFrame.mpCamera->project(endCamera);
+        const cv::Point2f startProjected(startProjectedEigen.x(),startProjectedEigen.y());
+        const cv::Point2f endProjected(endProjectedEigen.x(),endProjectedEigen.y());
         const cv::line_descriptor::KeyLine &observed=currentLines[m.queryIdx];
         const cv::Point2f observedDirection(observed.endPointX-observed.startPointX,observed.endPointY-observed.startPointY);
         const cv::Point2f projectedDirection=endProjected-startProjected;
