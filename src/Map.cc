@@ -82,6 +82,7 @@ void Map::AddMapPoint(MapPoint *pMP)
     unique_lock<mutex> lock(mMutexMap);
     mspMapPoints.insert(pMP);
 }
+void Map::AddMapLine(MapLine *pML){ unique_lock<mutex> lock(mMutexMap); mspMapLines.insert(pML); }
 
 void Map::SetImuInitialized()
 {
@@ -155,6 +156,7 @@ vector<MapPoint*> Map::GetAllMapPoints()
     unique_lock<mutex> lock(mMutexMap);
     return vector<MapPoint*>(mspMapPoints.begin(),mspMapPoints.end());
 }
+vector<MapLine*> Map::GetAllMapLines(){ unique_lock<mutex> lock(mMutexMap); return vector<MapLine*>(mspMapLines.begin(),mspMapLines.end()); }
 
 long unsigned int Map::MapPointsInMap()
 {

@@ -113,6 +113,7 @@ src/ORBmatcher.cc
 src/FrameDrawer.cc
 src/Converter.cc
 src/MapPoint.cc
+src/MapLine.cc
 src/KeyFrame.cc
 src/Atlas.cc
 src/Map.cc
@@ -147,6 +148,7 @@ include/ORBmatcher.h
 include/FrameDrawer.h
 include/Converter.h
 include/MapPoint.h
+include/MapLine.h
 include/KeyFrame.h
 include/Atlas.h
 include/Map.h

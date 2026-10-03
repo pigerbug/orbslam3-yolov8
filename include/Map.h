@@ -34,6 +34,7 @@ namespace ORB_SLAM3
 {
 
 class MapPoint;
+class MapLine;
 class KeyFrame;
 class Atlas;
 class KeyFrameDatabase;
@@ -75,6 +76,7 @@ public:
 
     void AddKeyFrame(KeyFrame* pKF);
     void AddMapPoint(MapPoint* pMP);
+    void AddMapLine(MapLine* pML);
     void EraseMapPoint(MapPoint* pMP);
     void EraseKeyFrame(KeyFrame* pKF);
     void SetReferenceMapPoints(const std::vector<MapPoint*> &vpMPs);
@@ -83,6 +85,7 @@ public:
 
     std::vector<KeyFrame*> GetAllKeyFrames();
     std::vector<MapPoint*> GetAllMapPoints();
+    std::vector<MapLine*> GetAllMapLines();
     std::vector<MapPoint*> GetReferenceMapPoints();
 
     long unsigned int MapPointsInMap();
@@ -160,6 +163,7 @@ protected:
     long unsigned int mnId;
 
     std::set<MapPoint*> mspMapPoints;
+    std::set<MapLine*> mspMapLines;
     std::set<KeyFrame*> mspKeyFrames;
 
     // Save/load, the set structure is broken in libboost 1.58 for ubuntu 16.04, a vector is serializated
