@@ -12,7 +12,7 @@ class LineExtractor
 public:
     static void Extract(const cv::Mat &image,
                         std::vector<cv::line_descriptor::KeyLine> &lines,
-                        cv::Mat &descriptors);
+                        cv::Mat &descriptors, size_t maxLines = 120);
 };
 }
 #endif
