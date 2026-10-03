@@ -71,11 +71,11 @@ Viewer.ViewpointF: 500.0
 
 DynamicFilter:
   enabled: 1
-  engine: "/home/你的用户名/ORB_SLAM3/model/yolov8n.engine"
+  engine: "/home/nan/workspace/orbslam3-yolov8/models/yolov8n.engine"
 
   # 0：推荐。仍提取框内 ORB 特征，在优化中按概率降权
   # 1：直接不提取动态框中的左图 ORB 特征
-  hardMask: 0
+  hardMask: 1
 
   # 框内特征的初始动态概率，优化信息矩阵约乘以 (1 - yoloPrior)
   yoloPrior: 0.70
