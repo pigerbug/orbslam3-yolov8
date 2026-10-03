@@ -21,6 +21,8 @@
 
 
 #include <complex>
+#include <cmath>
+#include <algorithm>
 
 #include <Eigen/StdVector>
 #include <Eigen/Dense>
@@ -36,6 +38,7 @@
 #include "Thirdparty/g2o/g2o/solvers/linear_solver_dense.h"
 #include "G2oTypes.h"
 #include "Converter.h"
+#include "MapLine.h"
 
 #include<mutex>
 
@@ -50,6 +53,24 @@ static double DynamicStaticWeight(const Frame *frame, const size_t index)
     // Keep a small residual contribution instead of a brittle hard rejection;
     // robust-kernel outlier classification remains the final arbiter.
     return std::max(0.05, 1.0 - static_cast<double>(frame->mvDynamicProbability[index]));
+}
+
+static bool LineEndpointDepth(const KeyFrame* pKF, const float u, const float v, double &depth)
+{
+    if(!pKF || pKF->mImDepth.empty() || pKF->mImDepth.type()!=CV_32F) return false;
+    const int x=cvRound(u), y=cvRound(v);
+    if(x<1 || y<1 || x>=pKF->mImDepth.cols-1 || y>=pKF->mImDepth.rows-1) return false;
+    vector<float> samples;
+    samples.reserve(9);
+    for(int dy=-1; dy<=1; ++dy) for(int dx=-1; dx<=1; ++dx)
+    {
+        const float z=pKF->mImDepth.at<float>(y+dy,x+dx);
+        if(std::isfinite(z) && z>0.f) samples.push_back(z);
+    }
+    if(samples.size()<3) return false;
+    nth_element(samples.begin(), samples.begin()+samples.size()/2, samples.end());
+    depth=samples[samples.size()/2];
+    return true;
 }
 
 bool sortByVal(const pair<MapPoint*, int> &a, const pair<MapPoint*, int> &b)
@@ -282,6 +303,99 @@ void Optimizer::BundleAdjustment(const vector<KeyFrame *> &vpKFs, const vector<M
         }
     }
 
+    // Global BA uses the same two endpoint vertices and point-to-line image
+    // residual as Local BA. MapLine ids are deliberately not used as g2o ids:
+    // MapPoint and MapLine ids have independent counters.
+    const vector<MapLine*> vpML = pMap->GetAllMapLines();
+    unsigned long maxPointVertexId = maxKFid;
+    for(size_t i=0; i<vpMP.size(); ++i)
+        maxPointVertexId = max(maxPointVertexId, vpMP[i]->mnId + maxKFid + 1);
+    unsigned long nextLineVertexId = maxPointVertexId + 1;
+    vector<MapLine*> vpOptimizedLines;
+    vector<pair<unsigned long,unsigned long> > vLineVertexIds;
+    const float thHuberLine = sqrt(3.841f);
+    for(size_t i=0; i<vpML.size(); ++i)
+    {
+        MapLine* pML = vpML[i];
+        if(!pML || pML->isBad()) continue;
+        const map<KeyFrame*,size_t> observations = pML->GetObservations();
+        if(observations.size() < 2) continue;
+
+        int validObservations = 0;
+        for(map<KeyFrame*,size_t>::const_iterator mit=observations.begin(), mend=observations.end(); mit!=mend; ++mit)
+        {
+            KeyFrame* pKFi = mit->first;
+            if(!pKFi || pKFi->isBad() || !optimizer.vertex(pKFi->mnId)) continue;
+            vector<cv::line_descriptor::KeyLine> lines;
+            cv::Mat descriptors;
+            vector<MapLine*> mapLines;
+            pKFi->GetLineFeatures(lines, descriptors, mapLines);
+            const size_t index = mit->second;
+            if(index >= lines.size() || index >= mapLines.size() || mapLines[index] != pML) continue;
+            const cv::line_descriptor::KeyLine &line = lines[index];
+            const double a = line.startPointY-line.endPointY;
+            const double b = line.endPointX-line.startPointX;
+            if(a*a+b*b > 1e-12) ++validObservations;
+        }
+        if(validObservations < 2) continue;
+
+        const unsigned long startId = nextLineVertexId++;
+        const unsigned long endId = nextLineVertexId++;
+        g2o::VertexSBAPointXYZ* vStart = new g2o::VertexSBAPointXYZ();
+        g2o::VertexSBAPointXYZ* vEnd = new g2o::VertexSBAPointXYZ();
+        vStart->setId(startId); vEnd->setId(endId);
+        vStart->setEstimate(pML->GetStart().cast<double>());
+        vEnd->setEstimate(pML->GetEnd().cast<double>());
+        vStart->setMarginalized(true); vEnd->setMarginalized(true);
+        optimizer.addVertex(vStart); optimizer.addVertex(vEnd);
+
+        for(map<KeyFrame*,size_t>::const_iterator mit=observations.begin(), mend=observations.end(); mit!=mend; ++mit)
+        {
+            KeyFrame* pKFi = mit->first;
+            if(!pKFi || pKFi->isBad() || !optimizer.vertex(pKFi->mnId)) continue;
+            vector<cv::line_descriptor::KeyLine> lines;
+            cv::Mat descriptors;
+            vector<MapLine*> mapLines;
+            pKFi->GetLineFeatures(lines, descriptors, mapLines);
+            const size_t index = mit->second;
+            if(index >= lines.size() || index >= mapLines.size() || mapLines[index] != pML) continue;
+            const cv::line_descriptor::KeyLine &line = lines[index];
+            const double a = line.startPointY-line.endPointY;
+            const double b = line.endPointX-line.startPointX;
+            const double norm = sqrt(a*a+b*b);
+            if(norm < 1e-9) continue;
+            Eigen::Vector3d measurement(a/norm, b/norm,
+                                        (line.startPointX*line.endPointY-line.endPointX*line.startPointY)/norm);
+            for(int endpoint=0; endpoint<2; ++endpoint)
+            {
+                ORB_SLAM3::EdgeSE3LinePoint* e = new ORB_SLAM3::EdgeSE3LinePoint();
+                e->setVertex(0, dynamic_cast<g2o::OptimizableGraph::Vertex*>(optimizer.vertex(endpoint==0 ? startId : endId)));
+                e->setVertex(1, dynamic_cast<g2o::OptimizableGraph::Vertex*>(optimizer.vertex(pKFi->mnId)));
+                e->setMeasurement(measurement);
+                e->setInformation(Eigen::Matrix<double,1,1>::Identity());
+                e->fx=pKFi->fx; e->fy=pKFi->fy; e->cx=pKFi->cx; e->cy=pKFi->cy;
+                if(bRobust) { g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber; e->setRobustKernel(rk); rk->setDelta(thHuberLine); }
+                optimizer.addEdge(e);
+
+                const float endpointU = endpoint==0 ? line.startPointX : line.endPointX;
+                const float endpointV = endpoint==0 ? line.startPointY : line.endPointY;
+                double depth = 0.;
+                if(LineEndpointDepth(pKFi, endpointU, endpointV, depth))
+                {
+                    ORB_SLAM3::EdgeSE3LinePointDepth* eDepth = new ORB_SLAM3::EdgeSE3LinePointDepth();
+                    eDepth->setVertex(0, dynamic_cast<g2o::OptimizableGraph::Vertex*>(optimizer.vertex(endpoint==0 ? startId : endId)));
+                    eDepth->setVertex(1, dynamic_cast<g2o::OptimizableGraph::Vertex*>(optimizer.vertex(pKFi->mnId)));
+                    eDepth->setMeasurement(depth);
+                    eDepth->setInformation(Eigen::Matrix<double,1,1>::Identity()/(0.05*0.05));
+                    if(bRobust) { g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber; eDepth->setRobustKernel(rk); rk->setDelta(thHuberLine); }
+                    optimizer.addEdge(eDepth);
+                }
+            }
+        }
+        vpOptimizedLines.push_back(pML);
+        vLineVertexIds.push_back(make_pair(startId,endId));
+    }
+
     // Optimize!
     optimizer.setVerbose(false);
     optimizer.initializeOptimization();
@@ -393,6 +507,21 @@ void Optimizer::BundleAdjustment(const vector<KeyFrame *> &vpKFs, const vector<M
         {
             pMP->mPosGBA = vPoint->estimate().cast<float>();
             pMP->mnBAGlobalForKF = nLoopKF;
+        }
+    }
+
+    for(size_t i=0; i<vpOptimizedLines.size(); ++i)
+    {
+        g2o::VertexSBAPointXYZ* vStart = static_cast<g2o::VertexSBAPointXYZ*>(optimizer.vertex(vLineVertexIds[i].first));
+        g2o::VertexSBAPointXYZ* vEnd = static_cast<g2o::VertexSBAPointXYZ*>(optimizer.vertex(vLineVertexIds[i].second));
+        if(!vStart || !vEnd) continue;
+        if(nLoopKF==pMap->GetOriginKF()->mnId)
+            vpOptimizedLines[i]->SetEndpoints(vStart->estimate().cast<float>(), vEnd->estimate().cast<float>());
+        else
+        {
+            vpOptimizedLines[i]->mStartGBA=vStart->estimate().cast<float>();
+            vpOptimizedLines[i]->mEndGBA=vEnd->estimate().cast<float>();
+            vpOptimizedLines[i]->mnBAGlobalForKF=nLoopKF;
         }
     }
 }
@@ -1148,6 +1277,8 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
     // Local MapPoints seen in Local KeyFrames
     num_fixedKF = 0;
     list<MapPoint*> lLocalMapPoints;
+    list<MapLine*> lLocalMapLines;
+    set<MapLine*> sLocalMapLines;
     set<MapPoint*> sNumObsMP;
     for(list<KeyFrame*>::iterator lit=lLocalKeyFrames.begin() , lend=lLocalKeyFrames.end(); lit!=lend; lit++)
     {
@@ -1171,6 +1302,16 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
                     }
                 }
         }
+
+        vector<cv::line_descriptor::KeyLine> lines;
+        cv::Mat lineDescriptors;
+        vector<MapLine*> vpLines;
+        pKFi->GetLineFeatures(lines, lineDescriptors, vpLines);
+        for(vector<MapLine*>::iterator vit=vpLines.begin(), vend=vpLines.end(); vit!=vend; ++vit)
+        {
+            if(*vit && sLocalMapLines.insert(*vit).second)
+                lLocalMapLines.push_back(*vit);
+        }
     }
 
     // Fixed Keyframes. Keyframes that see Local MapPoints but that are not Local Keyframes
@@ -1186,6 +1327,23 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
             {                
                 pKFi->mnBAFixedForKF=pKF->mnId;
                 if(!pKFi->isBad() && pKFi->GetMap() == pCurrentMap)
+                    lFixedCameras.push_back(pKFi);
+            }
+        }
+    }
+    // A line can connect the local window to a keyframe without a selected
+    // point observation. Keep that camera fixed so its line residual is still
+    // a valid multi-view constraint instead of silently dropping the line.
+    for(list<MapLine*>::iterator lit=lLocalMapLines.begin(), lend=lLocalMapLines.end(); lit!=lend; ++lit)
+    {
+        map<KeyFrame*,size_t> observations = (*lit)->GetObservations();
+        for(map<KeyFrame*,size_t>::iterator mit=observations.begin(), mend=observations.end(); mit!=mend; ++mit)
+        {
+            KeyFrame* pKFi = mit->first;
+            if(pKFi->mnBALocalForKF!=pKF->mnId && pKFi->mnBAFixedForKF!=pKF->mnId)
+            {
+                pKFi->mnBAFixedForKF=pKF->mnId;
+                if(!pKFi->isBad() && pKFi->GetMap()==pCurrentMap)
                     lFixedCameras.push_back(pKFi);
             }
         }
@@ -1415,6 +1573,107 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
             }
         }
     }
+
+    // Add both world endpoints of every local MapLine. Each endpoint is
+    // constrained by its signed pixel distance to the observed image line.
+    // This is the standard point-to-line reprojection residual and jointly
+    // optimizes poses, MapPoints and MapLine endpoints in the same graph.
+    unsigned long maxPointVertexId = maxKFid;
+    for(list<MapPoint*>::iterator lit=lLocalMapPoints.begin(), lend=lLocalMapPoints.end(); lit!=lend; ++lit)
+        maxPointVertexId = max(maxPointVertexId, (*lit)->mnId + maxKFid + 1);
+    unsigned long nextLineVertexId = maxPointVertexId + 1;
+    vector<MapLine*> vpOptimizedLines;
+    vector<pair<unsigned long,unsigned long> > vLineVertexIds;
+    vector<ORB_SLAM3::EdgeSE3LinePoint*> vpEdgesLine;
+    vector<KeyFrame*> vpEdgeKFLine;
+    vector<MapLine*> vpEdgeMapLine;
+
+    const float thHuberLine = sqrt(3.841f); // one-dimensional, 95% chi-square
+    for(list<MapLine*>::iterator lit=lLocalMapLines.begin(), lend=lLocalMapLines.end(); ++lit)
+    {
+        MapLine* pML = *lit;
+        const map<KeyFrame*,size_t> observations = pML->GetObservations();
+        if(pML->isBad() || observations.size() < 2) continue;
+
+        int validObservations = 0;
+        for(map<KeyFrame*,size_t>::const_iterator mit=observations.begin(), mend=observations.end(); mit!=mend; ++mit)
+        {
+            KeyFrame* pKFi = mit->first;
+            if(!pKFi || pKFi->isBad() || pKFi->GetMap()!=pCurrentMap || !optimizer.vertex(pKFi->mnId)) continue;
+            vector<cv::line_descriptor::KeyLine> lines;
+            cv::Mat descriptors;
+            vector<MapLine*> mapLines;
+            pKFi->GetLineFeatures(lines, descriptors, mapLines);
+            const size_t index = mit->second;
+            if(index >= lines.size() || index >= mapLines.size() || mapLines[index] != pML) continue;
+            const cv::line_descriptor::KeyLine &line = lines[index];
+            const double a = line.startPointY-line.endPointY;
+            const double b = line.endPointX-line.startPointX;
+            if(a*a+b*b > 1e-12) ++validObservations;
+        }
+        if(validObservations < 2) continue;
+
+        const unsigned long startId = nextLineVertexId++;
+        const unsigned long endId = nextLineVertexId++;
+        g2o::VertexSBAPointXYZ* vStart = new g2o::VertexSBAPointXYZ();
+        g2o::VertexSBAPointXYZ* vEnd = new g2o::VertexSBAPointXYZ();
+        vStart->setId(startId); vEnd->setId(endId);
+        vStart->setEstimate(pML->GetStart().cast<double>());
+        vEnd->setEstimate(pML->GetEnd().cast<double>());
+        vStart->setMarginalized(true); vEnd->setMarginalized(true);
+        optimizer.addVertex(vStart); optimizer.addVertex(vEnd);
+
+        int lineEdges = 0;
+        for(map<KeyFrame*,size_t>::const_iterator mit=observations.begin(), mend=observations.end(); mit!=mend; ++mit)
+        {
+            KeyFrame* pKFi = mit->first;
+            if(!pKFi || pKFi->isBad() || pKFi->GetMap()!=pCurrentMap || !optimizer.vertex(pKFi->mnId)) continue;
+            vector<cv::line_descriptor::KeyLine> lines;
+            cv::Mat descriptors;
+            vector<MapLine*> mapLines;
+            pKFi->GetLineFeatures(lines, descriptors, mapLines);
+            const size_t index = mit->second;
+            if(index >= lines.size() || index >= mapLines.size() || mapLines[index] != pML) continue;
+            const cv::line_descriptor::KeyLine &line = lines[index];
+            const double a = line.startPointY-line.endPointY;
+            const double b = line.endPointX-line.startPointX;
+            const double norm = sqrt(a*a+b*b);
+            if(norm < 1e-9) continue;
+            Eigen::Vector3d measurement(a/norm, b/norm,
+                                        (line.startPointX*line.endPointY-line.endPointX*line.startPointY)/norm);
+            for(int endpoint=0; endpoint<2; ++endpoint)
+            {
+                ORB_SLAM3::EdgeSE3LinePoint* e = new ORB_SLAM3::EdgeSE3LinePoint();
+                e->setVertex(0, dynamic_cast<g2o::OptimizableGraph::Vertex*>(optimizer.vertex(endpoint==0 ? startId : endId)));
+                e->setVertex(1, dynamic_cast<g2o::OptimizableGraph::Vertex*>(optimizer.vertex(pKFi->mnId)));
+                e->setMeasurement(measurement);
+                e->setInformation(Eigen::Matrix<double,1,1>::Identity());
+                e->fx=pKFi->fx; e->fy=pKFi->fy; e->cx=pKFi->cx; e->cy=pKFi->cy;
+                g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+                e->setRobustKernel(rk); rk->setDelta(thHuberLine);
+                optimizer.addEdge(e);
+                vpEdgesLine.push_back(e); vpEdgeKFLine.push_back(pKFi); vpEdgeMapLine.push_back(pML);
+
+                const float endpointU = endpoint==0 ? line.startPointX : line.endPointX;
+                const float endpointV = endpoint==0 ? line.startPointY : line.endPointY;
+                double depth = 0.;
+                if(LineEndpointDepth(pKFi, endpointU, endpointV, depth))
+                {
+                    ORB_SLAM3::EdgeSE3LinePointDepth* eDepth = new ORB_SLAM3::EdgeSE3LinePointDepth();
+                    eDepth->setVertex(0, dynamic_cast<g2o::OptimizableGraph::Vertex*>(optimizer.vertex(endpoint==0 ? startId : endId)));
+                    eDepth->setVertex(1, dynamic_cast<g2o::OptimizableGraph::Vertex*>(optimizer.vertex(pKFi->mnId)));
+                    eDepth->setMeasurement(depth);
+                    eDepth->setInformation(Eigen::Matrix<double,1,1>::Identity()/(0.05*0.05));
+                    g2o::RobustKernelHuber* rkDepth = new g2o::RobustKernelHuber;
+                    eDepth->setRobustKernel(rkDepth); rkDepth->setDelta(thHuberLine);
+                    optimizer.addEdge(eDepth);
+                }
+                ++lineEdges; ++nEdges;
+            }
+        }
+        vpOptimizedLines.push_back(pML);
+        vLineVertexIds.push_back(make_pair(startId,endId));
+    }
     num_edges = nEdges;
 
     if(pbStopFlag)
@@ -1473,6 +1732,17 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
         }
     }
 
+    // An image-line observation is rejected only if both endpoint residuals
+    // fail. Rejecting one endpoint alone would incorrectly remove valid lines
+    // whose projected end lies just outside the image.
+    map<pair<KeyFrame*,MapLine*>, int> lineOutlierEndpoints;
+    for(size_t i=0; i<vpEdgesLine.size(); ++i)
+    {
+        ORB_SLAM3::EdgeSE3LinePoint* e = vpEdgesLine[i];
+        if(e->chi2()>3.841 || !e->isDepthPositive())
+            ++lineOutlierEndpoints[make_pair(vpEdgeKFLine[i], vpEdgeMapLine[i])];
+    }
+
 
     // Get Map Mutex
     unique_lock<mutex> lock(pMap->mMutexMapUpdate);
@@ -1485,6 +1755,19 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
             MapPoint* pMPi = vToErase[i].second;
             pKFi->EraseMapPointMatch(pMPi);
             pMPi->EraseObservation(pKFi);
+        }
+    }
+    for(map<pair<KeyFrame*,MapLine*>,int>::iterator it=lineOutlierEndpoints.begin(); it!=lineOutlierEndpoints.end(); ++it)
+    {
+        if(it->second < 2) continue;
+        KeyFrame* pKFi = it->first.first;
+        MapLine* pML = it->first.second;
+        pKFi->EraseMapLineMatch(pML);
+        pML->EraseObservation(pKFi);
+        if(pML->Observations() < 2)
+        {
+            pML->SetBadFlag();
+            pMap->EraseMapLine(pML);
         }
     }
 
@@ -1506,6 +1789,13 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
         g2o::VertexSBAPointXYZ* vPoint = static_cast<g2o::VertexSBAPointXYZ*>(optimizer.vertex(pMP->mnId+maxKFid+1));
         pMP->SetWorldPos(vPoint->estimate().cast<float>());
         pMP->UpdateNormalAndDepth();
+    }
+
+    for(size_t i=0; i<vpOptimizedLines.size(); ++i)
+    {
+        g2o::VertexSBAPointXYZ* vStart = static_cast<g2o::VertexSBAPointXYZ*>(optimizer.vertex(vLineVertexIds[i].first));
+        g2o::VertexSBAPointXYZ* vEnd = static_cast<g2o::VertexSBAPointXYZ*>(optimizer.vertex(vLineVertexIds[i].second));
+        if(vStart && vEnd) vpOptimizedLines[i]->SetEndpoints(vStart->estimate().cast<float>(), vEnd->estimate().cast<float>());
     }
 
     pMap->IncreaseChangeIndex();

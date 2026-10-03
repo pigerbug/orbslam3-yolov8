@@ -114,19 +114,29 @@ void LocalMapping::LineWorkerLoop()
 
 void LocalMapping::CreateMapLines(KeyFrame* pKF)
 {
-    if(!pKF || pKF->mLineDescriptors.empty() || pKF->mImDepth.empty()) return;
+    if(!pKF || pKF->mImDepth.empty()) return;
+    std::vector<cv::line_descriptor::KeyLine> keyLines;
+    cv::Mat keyDescriptors;
+    std::vector<MapLine*> keyMapLines;
+    pKF->GetLineFeatures(keyLines, keyDescriptors, keyMapLines);
+    if(keyDescriptors.empty()) return;
     const std::vector<KeyFrame*> neighbors=pKF->GetBestCovisibilityKeyFrames(5);
     for(size_t n=0;n<neighbors.size();++n)
     {
         KeyFrame* other=neighbors[n];
-        if(!other || other->mLineDescriptors.empty() || other->mImDepth.empty()) continue;
-        std::vector<cv::DMatch> matches; LineMatcher::Match(pKF->mLineDescriptors,other->mLineDescriptors,matches);
+        if(!other || other->mImDepth.empty()) continue;
+        std::vector<cv::line_descriptor::KeyLine> otherLines;
+        cv::Mat otherDescriptors;
+        std::vector<MapLine*> otherMapLines;
+        other->GetLineFeatures(otherLines, otherDescriptors, otherMapLines);
+        if(otherDescriptors.empty()) continue;
+        std::vector<cv::DMatch> matches; LineMatcher::Match(keyDescriptors,otherDescriptors,matches);
         for(size_t m=0;m<matches.size();++m)
         {
             const size_t a=matches[m].queryIdx,b=matches[m].trainIdx;
-            if(a>=pKF->mvKeyLines.size() || b>=other->mvKeyLines.size() || pKF->GetMapLine(a) || other->GetMapLine(b)) continue;
+            if(a>=keyLines.size() || b>=otherLines.size() || a>=keyMapLines.size() || b>=otherMapLines.size() || keyMapLines[a] || otherMapLines[b]) continue;
             Eigen::Vector3f start,end;
-            const cv::line_descriptor::KeyLine &line=pKF->mvKeyLines[a];
+            const cv::line_descriptor::KeyLine &line=keyLines[a];
             if(!BackProjectLineEndpoint(pKF,line.startPointX,line.startPointY,start) ||
                !BackProjectLineEndpoint(pKF,line.endPointX,line.endPointY,end) || (end-start).norm()<0.05f) continue;
             MapLine* mapLine=new MapLine(start,end,mpAtlas->GetCurrentMap());
@@ -1566,6 +1576,28 @@ void LocalMapping::InitializeIMU(float priorG, float priorA, bool bFIBA)
 
             // Backproject using corrected camera
             pMP->SetWorldPos(pRefKF->GetPoseInverse() * Xc);
+        }
+    }
+
+    const vector<MapLine*> vpMLs = mpAtlas->GetCurrentMap()->GetAllMapLines();
+    for(size_t i=0; i<vpMLs.size(); ++i)
+    {
+        MapLine* pML = vpMLs[i];
+        if(!pML || pML->isBad()) continue;
+        if(pML->mnBAGlobalForKF==GBAid)
+        {
+            pML->SetEndpoints(pML->mStartGBA, pML->mEndGBA);
+            continue;
+        }
+        const map<KeyFrame*,size_t> observations = pML->GetObservations();
+        for(map<KeyFrame*,size_t>::const_iterator it=observations.begin(); it!=observations.end(); ++it)
+        {
+            KeyFrame* pRefKF = it->first;
+            if(!pRefKF || pRefKF->mnBAGlobalForKF!=GBAid) continue;
+            const Eigen::Vector3f startCamera = pRefKF->mTcwBefGBA * pML->GetStart();
+            const Eigen::Vector3f endCamera = pRefKF->mTcwBefGBA * pML->GetEnd();
+            pML->SetEndpoints(pRefKF->GetPoseInverse()*startCamera, pRefKF->GetPoseInverse()*endCamera);
+            break;
         }
     }
 

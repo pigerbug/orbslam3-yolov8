@@ -18,6 +18,7 @@
 
 
 #include "Map.h"
+#include "MapLine.h"
 
 #include<mutex>
 
@@ -45,6 +46,7 @@ Map::~Map()
 {
     //TODO: erase all points from memory
     mspMapPoints.clear();
+    mspMapLines.clear();
 
     //TODO: erase all keyframes from memory
     mspKeyFrames.clear();
@@ -83,6 +85,7 @@ void Map::AddMapPoint(MapPoint *pMP)
     mspMapPoints.insert(pMP);
 }
 void Map::AddMapLine(MapLine *pML){ unique_lock<mutex> lock(mMutexMap); mspMapLines.insert(pML); }
+void Map::EraseMapLine(MapLine *pML){ unique_lock<mutex> lock(mMutexMap); mspMapLines.erase(pML); }
 
 void Map::SetImuInitialized()
 {
@@ -226,6 +229,7 @@ void Map::clear()
     }
 
     mspMapPoints.clear();
+    mspMapLines.clear();
     mspKeyFrames.clear();
     mnMaxKFid = mnInitKFid;
     mbImuInitialized = false;
@@ -280,6 +284,13 @@ void Map::ApplyScaledRotation(const Sophus::SE3f &T, const float s, const bool b
         MapPoint* pMP = *sit;
         pMP->SetWorldPos(s * Ryw * pMP->GetWorldPos() + tyw);
         pMP->UpdateNormalAndDepth();
+    }
+    for(set<MapLine*>::iterator sit=mspMapLines.begin(); sit!=mspMapLines.end(); ++sit)
+    {
+        MapLine* pML = *sit;
+        if(!pML || pML->isBad()) continue;
+        pML->SetEndpoints(s * Ryw * pML->GetStart() + tyw,
+                          s * Ryw * pML->GetEnd() + tyw);
     }
     mnMapChange++;
 }

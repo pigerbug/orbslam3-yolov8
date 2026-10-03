@@ -114,6 +114,83 @@ public:
     GeometricCamera* pCamera;
 };
 
+// Point-to-image-line residual used for each endpoint of a MapLine.  Keeping
+// the endpoint as a normal SBA point vertex lets point and line constraints
+// share the same SE3 pose vertex in RGB-D/stereo Local and Global BA.
+// Measurement is a normalized image line ax + by + c = 0 in pixel space.
+class EdgeSE3LinePoint: public g2o::BaseBinaryEdge<1, Eigen::Vector3d, g2o::VertexSBAPointXYZ, g2o::VertexSE3Expmap>{
+public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    bool read(std::istream& is) { return false; }
+    bool write(std::ostream& os) const { return false; }
+
+    void computeError()
+    {
+        const g2o::VertexSBAPointXYZ* point = static_cast<const g2o::VertexSBAPointXYZ*>(_vertices[0]);
+        const g2o::VertexSE3Expmap* pose = static_cast<const g2o::VertexSE3Expmap*>(_vertices[1]);
+        const Eigen::Vector3d pc = pose->estimate().map(point->estimate());
+        if(pc[2] <= 1e-9) { _error[0] = 1e3; return; }
+        const double u = fx * pc[0] / pc[2] + cx;
+        const double v = fy * pc[1] / pc[2] + cy;
+        _error[0] = _measurement[0] * u + _measurement[1] * v + _measurement[2];
+    }
+
+    bool isDepthPositive() const
+    {
+        const g2o::VertexSBAPointXYZ* point = static_cast<const g2o::VertexSBAPointXYZ*>(_vertices[0]);
+        const g2o::VertexSE3Expmap* pose = static_cast<const g2o::VertexSE3Expmap*>(_vertices[1]);
+        return pose->estimate().map(point->estimate())[2] > 1e-9;
+    }
+
+    void linearizeOplus()
+    {
+        const g2o::VertexSBAPointXYZ* point = static_cast<const g2o::VertexSBAPointXYZ*>(_vertices[0]);
+        const g2o::VertexSE3Expmap* pose = static_cast<const g2o::VertexSE3Expmap*>(_vertices[1]);
+        const Eigen::Vector3d pc = pose->estimate().map(point->estimate());
+        const double x = pc[0], y = pc[1], z = pc[2];
+        if(z <= 1e-9) { _jacobianOplusXi.setZero(); _jacobianOplusXj.setZero(); return; }
+        const double z2 = z*z;
+        Eigen::Matrix<double,1,3> dline_dpc;
+        dline_dpc << _measurement[0] * fx / z,
+                      _measurement[1] * fy / z,
+                     -(_measurement[0] * fx * x + _measurement[1] * fy * y) / z2;
+        _jacobianOplusXi = dline_dpc * pose->estimate().rotation().toRotationMatrix();
+        Eigen::Matrix3d minusSkew;
+        minusSkew << 0., z, -y, -z, 0., x, y, -x, 0.;
+        _jacobianOplusXj.block<1,3>(0,0) = dline_dpc * minusSkew;
+        _jacobianOplusXj.block<1,3>(0,3) = dline_dpc;
+    }
+
+    double fx = 0., fy = 0., cx = 0., cy = 0.;
+};
+
+// RGB-D depth for a detected line endpoint. Together with the 1-D image-line
+// residual above this removes the otherwise unobservable motion along a line.
+class EdgeSE3LinePointDepth: public g2o::BaseBinaryEdge<1, double, g2o::VertexSBAPointXYZ, g2o::VertexSE3Expmap>{
+public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    bool read(std::istream& is) { return false; }
+    bool write(std::ostream& os) const { return false; }
+
+    void computeError()
+    {
+        const g2o::VertexSBAPointXYZ* point = static_cast<const g2o::VertexSBAPointXYZ*>(_vertices[0]);
+        const g2o::VertexSE3Expmap* pose = static_cast<const g2o::VertexSE3Expmap*>(_vertices[1]);
+        _error[0] = pose->estimate().map(point->estimate())[2] - _measurement;
+    }
+
+    void linearizeOplus()
+    {
+        const g2o::VertexSBAPointXYZ* point = static_cast<const g2o::VertexSBAPointXYZ*>(_vertices[0]);
+        const g2o::VertexSE3Expmap* pose = static_cast<const g2o::VertexSE3Expmap*>(_vertices[1]);
+        const Eigen::Vector3d pc = pose->estimate().map(point->estimate());
+        _jacobianOplusXi = pose->estimate().rotation().toRotationMatrix().row(2);
+        _jacobianOplusXj << pc[1], -pc[0], 0., 0., 0., 1.;
+    }
+};
+
 class  EdgeSE3ProjectXYZToBody: public  g2o::BaseBinaryEdge<2, Eigen::Vector2d, g2o::VertexSBAPointXYZ, g2o::VertexSE3Expmap>{
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW

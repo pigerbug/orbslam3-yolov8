@@ -24,6 +24,7 @@
 #include "Optimizer.h"
 #include "ORBmatcher.h"
 #include "G2oTypes.h"
+#include "MapLine.h"
 
 #include<mutex>
 #include<thread>
@@ -2482,6 +2483,31 @@ void LoopClosing::RunGlobalBundleAdjustment(Map* pActiveMap, unsigned long nLoop
 
                     // Backproject using corrected camera
                     pMP->SetWorldPos(pRefKF->GetPoseInverse() * Xc);
+                }
+            }
+
+            // MapLines are optimized as endpoint vertices by Global BA. Lines
+            // not present when GBA started follow their observed reference KF,
+            // exactly like late-created MapPoints above.
+            const vector<MapLine*> vpMLs = pActiveMap->GetAllMapLines();
+            for(size_t i=0; i<vpMLs.size(); ++i)
+            {
+                MapLine* pML = vpMLs[i];
+                if(!pML || pML->isBad()) continue;
+                if(pML->mnBAGlobalForKF==nLoopKF)
+                {
+                    pML->SetEndpoints(pML->mStartGBA, pML->mEndGBA);
+                    continue;
+                }
+                const map<KeyFrame*,size_t> observations = pML->GetObservations();
+                for(map<KeyFrame*,size_t>::const_iterator it=observations.begin(); it!=observations.end(); ++it)
+                {
+                    KeyFrame* pRefKF = it->first;
+                    if(!pRefKF || pRefKF->mnBAGlobalForKF!=nLoopKF) continue;
+                    const Eigen::Vector3f startCamera = pRefKF->mTcwBefGBA * pML->GetStart();
+                    const Eigen::Vector3f endCamera = pRefKF->mTcwBefGBA * pML->GetEnd();
+                    pML->SetEndpoints(pRefKF->GetPoseInverse()*startCamera, pRefKF->GetPoseInverse()*endCamera);
+                    break;
                 }
             }
 

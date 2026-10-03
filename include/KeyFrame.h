@@ -386,6 +386,9 @@ public:
     void SetLineFeatures(const std::vector<cv::line_descriptor::KeyLine> &lines, const cv::Mat &descriptors);
     void AddMapLine(MapLine* pML, const size_t &idx);
     MapLine* GetMapLine(const size_t &idx);
+    void EraseMapLineMatch(MapLine* pML);
+    void GetLineFeatures(std::vector<cv::line_descriptor::KeyLine> &lines, cv::Mat &descriptors,
+                         std::vector<MapLine*> &mapLines);
     std::vector<unsigned char> mvbDynamicForMapping;
     const std::vector<float> mvuRight; // negative value for monocular points
     const std::vector<float> mvDepth; // negative value for monocular points

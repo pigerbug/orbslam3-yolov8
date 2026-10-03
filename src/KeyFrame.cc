@@ -19,6 +19,8 @@
 #include "KeyFrame.h"
 #include "Converter.h"
 #include "ImuTypes.h"
+#include "Map.h"
+#include "MapLine.h"
 #include<mutex>
 
 namespace ORB_SLAM3
@@ -124,6 +126,22 @@ MapLine* KeyFrame::GetMapLine(const size_t &idx)
 {
     unique_lock<mutex> lock(mMutexFeatures);
     return idx < mvpMapLines.size() ? mvpMapLines[idx] : static_cast<MapLine*>(NULL);
+}
+
+void KeyFrame::EraseMapLineMatch(MapLine* pML)
+{
+    unique_lock<mutex> lock(mMutexFeatures);
+    for(vector<MapLine*>::iterator it=mvpMapLines.begin(), end=mvpMapLines.end(); it!=end; ++it)
+        if(*it==pML) *it=static_cast<MapLine*>(NULL);
+}
+
+void KeyFrame::GetLineFeatures(vector<cv::line_descriptor::KeyLine> &lines, cv::Mat &descriptors,
+                               vector<MapLine*> &mapLines)
+{
+    unique_lock<mutex> lock(mMutexFeatures);
+    lines = mvKeyLines;
+    descriptors = mLineDescriptors.clone();
+    mapLines = mvpMapLines;
 }
 
 void KeyFrame::SetPose(const Sophus::SE3f &Tcw)
@@ -618,12 +636,33 @@ void KeyFrame::SetBadFlag()
         }
     }
 
+    // Keep MapLine observations symmetric with KeyFrame lifetime.  Without
+    // this, keyframe culling leaves dangling line observations that can later
+    // be selected by Local/Global point-line BA.
+    vector<cv::line_descriptor::KeyLine> lines;
+    cv::Mat lineDescriptors;
+    vector<MapLine*> mapLines;
+    GetLineFeatures(lines, lineDescriptors, mapLines);
+    set<MapLine*> uniqueLines(mapLines.begin(), mapLines.end());
+    for(set<MapLine*>::iterator it=uniqueLines.begin(), end=uniqueLines.end(); it!=end; ++it)
+    {
+        MapLine* pML = *it;
+        if(!pML) continue;
+        pML->EraseObservation(this);
+        if(pML->Observations() < 2)
+        {
+            pML->SetBadFlag();
+            mpMap->EraseMapLine(pML);
+        }
+    }
+
     {
         unique_lock<mutex> lock(mMutexConnections);
         unique_lock<mutex> lock1(mMutexFeatures);
 
         mConnectedKeyFrameWeights.clear();
         mvpOrderedConnectedKeyFrames.clear();
+        mvpMapLines.clear();
 
         // Update Spanning Tree
         set<KeyFrame*> sParentCandidates;
