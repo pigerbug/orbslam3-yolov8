@@ -1540,7 +1540,7 @@ void Tracking::ApplyPersistentManhattanImmunity()
         Eigen::Vector3f point;
         if(!mCurrentFrame.UnprojectStereo(static_cast<int>(i), point)) continue;
         for(size_t j = 0; j < planes.size(); ++j)
-            if(std::fabs(planes[j][0]*point.x()+planes[j][1]*point.y()+planes[j][2]*point.z()+planes[j][3]) < mDynamicFilter.PlaneDistance())
+            if(std::fabs(planes[j][0]*point.x()+planes[j][1]*point.y()+planes[j][2]*point.z()+planes[j][3]) < mDynamicFilter.ManhattanPlaneDistance())
             {
                 mCurrentFrame.mvDynamicProbability[i] = 0.0f;
                 mCurrentFrame.mvbManhattanImmune[i] = 1;

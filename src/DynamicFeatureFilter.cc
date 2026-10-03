@@ -177,7 +177,7 @@ int DynamicFeatureFilter::ResultWaitMs() const
     return mConfig.resultWaitMs;
 }
 
-float DynamicFeatureFilter::PlaneDistance() const
+float DynamicFeatureFilter::ManhattanPlaneDistance() const
 {
     return mConfig.planeDistance;
 }
