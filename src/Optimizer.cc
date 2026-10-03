@@ -1589,7 +1589,7 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
     vector<MapLine*> vpEdgeMapLine;
 
     const float thHuberLine = sqrt(3.841f); // one-dimensional, 95% chi-square
-    for(list<MapLine*>::iterator lit=lLocalMapLines.begin(), lend=lLocalMapLines.end(); ++lit)
+    for(list<MapLine*>::iterator lit=lLocalMapLines.begin(), lend=lLocalMapLines.end(); lit!=lend; ++lit)
     {
         MapLine* pML = *lit;
         const map<KeyFrame*,size_t> observations = pML->GetObservations();
