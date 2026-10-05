@@ -83,6 +83,8 @@ public:
     bool IsInitializing();
     double GetCurrKFTime();
     KeyFrame* GetCurrKF();
+    void SetManhattanPlaneEnabled(bool enabled);
+    void SetLineFeatureEnabled(bool enabled);
     std::vector<cv::Vec4f> GetStableManhattanPlanes() const;
 
     std::mutex mMutexImuInit;
@@ -180,6 +182,8 @@ protected:
     std::mutex mMutexLineTasks;
     std::condition_variable mConditionLineTasks;
     bool mbStopLineWorker;
+    bool mbLineFeatureEnabled;
+    bool mbManhattanPlaneEnabled;
     std::vector<cv::Vec4f> mvStableManhattanPlanes;
     mutable std::mutex mMutexManhattanPlanes;
 

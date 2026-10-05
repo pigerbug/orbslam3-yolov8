@@ -24,13 +24,14 @@ public:
     struct Config {
         bool enabled;
         bool hardMask;
+        bool sampsonEnabled;
         float yoloPrior;
         float dynamicThreshold;
         float sampsonScale;
         float planeDistance;
         int starvationThreshold;
         int resultWaitMs;
-        Config() : enabled(false), hardMask(false), yoloPrior(0.70f),
+        Config() : enabled(false), hardMask(false), sampsonEnabled(true), yoloPrior(0.70f),
                    dynamicThreshold(0.55f), sampsonScale(3.0f),
                    planeDistance(0.05f), starvationThreshold(80), resultWaitMs(10) {}
     };

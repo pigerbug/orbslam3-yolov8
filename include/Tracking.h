@@ -271,6 +271,8 @@ protected:
     ORBextractor* mpORBextractorLeft, *mpORBextractorRight;
     ORBextractor* mpIniORBextractor;
     DynamicFeatureFilter mDynamicFilter;
+    bool mbLineFeatureEnabled = true;
+    bool mbManhattanPlaneEnabled = true;
     // Evaluated in Tracking because it requires the current pose and the
     // world-frame plane landmarks owned by LocalMapping.
     bool mbGroundShadowEnabled = false;

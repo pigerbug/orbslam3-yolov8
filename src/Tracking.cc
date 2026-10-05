@@ -62,6 +62,7 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         DynamicFeatureFilter::Config dynamicConfig;
         dynamicConfig.enabled = (int)dynamicNode["enabled"] != 0;
         if(!dynamicNode["hardMask"].empty()) dynamicConfig.hardMask = (int)dynamicNode["hardMask"] != 0;
+        if(!dynamicNode["sampsonEnabled"].empty()) dynamicConfig.sampsonEnabled = (int)dynamicNode["sampsonEnabled"] != 0;
         if(!dynamicNode["yoloPrior"].empty()) dynamicConfig.yoloPrior = (float)dynamicNode["yoloPrior"];
         if(!dynamicNode["dynamicThreshold"].empty()) dynamicConfig.dynamicThreshold = (float)dynamicNode["dynamicThreshold"];
         if(!dynamicNode["sampsonScale"].empty()) dynamicConfig.sampsonScale = (float)dynamicNode["sampsonScale"];
@@ -90,6 +91,14 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         if(!shadowNode["textureStd"].empty()) mGroundShadowTextureStd = static_cast<float>(shadowNode["textureStd"]);
         if(!shadowNode["geometryThreshold"].empty()) mGroundShadowGeometryThreshold = static_cast<float>(shadowNode["geometryThreshold"]);
     }
+
+    cv::FileNode manhattanNode = dynamicSettings["ManhattanPlane"];
+    if(!manhattanNode.empty() && !manhattanNode["enabled"].empty())
+        mbManhattanPlaneEnabled = static_cast<int>(manhattanNode["enabled"]) != 0;
+
+    cv::FileNode lineFeatureNode = dynamicSettings["LineFeature"];
+    if(!lineFeatureNode.empty() && !lineFeatureNode["enabled"].empty())
+        mbLineFeatureEnabled = static_cast<int>(lineFeatureNode["enabled"]) != 0;
 
     cv::FileNode lineTrackingNode = dynamicSettings["LineTracking"];
     if(!lineTrackingNode.empty())
@@ -1556,6 +1565,7 @@ void Tracking::UpdateGeometricDynamicPrior()
 
 void Tracking::ApplyPersistentManhattanImmunity()
 {
+    if(!mbManhattanPlaneEnabled) return;
     const std::vector<cv::Vec4f> planes = mpLocalMapper->GetStableManhattanPlanes();
     if(planes.empty()) return;
     for(size_t i = 0; i < mCurrentFrame.mvDynamicProbability.size(); ++i)
@@ -1578,7 +1588,7 @@ void Tracking::ApplyPersistentManhattanImmunity()
 
 void Tracking::ApplyGroundShadowProbability()
 {
-    if(!mbGroundShadowEnabled || !mCurrentFrame.HasPose() || mCurrentFrame.mImDepth.empty() ||
+    if(!mbGroundShadowEnabled || !mbManhattanPlaneEnabled || !mCurrentFrame.HasPose() || mCurrentFrame.mImDepth.empty() ||
        mCurrentFrame.mvDynamicBoxes.empty() || mImGray.empty() || !mpLocalMapper)
         return;
 
@@ -1736,7 +1746,7 @@ void Tracking::RejectDynamicMapPointObservations()
 
 void Tracking::RefinePoseWithLines()
 {
-    if(!mbLineTrackingEnabled || !mpReferenceKF || mImGray.empty()) return;
+    if(!mbLineFeatureEnabled || !mbLineTrackingEnabled || !mpReferenceKF || mImGray.empty()) return;
     int staticPoints=0;
     for(size_t i=0;i<mCurrentFrame.mvpMapPoints.size();++i)
         if(mCurrentFrame.mvpMapPoints[i] && (i>=mCurrentFrame.mvbDynamicForMapping.size() || !mCurrentFrame.mvbDynamicForMapping[i])) ++staticPoints;
@@ -3593,7 +3603,8 @@ void Tracking::CreateNewKeyFrame()
         return;
 
     KeyFrame* pKF = new KeyFrame(mCurrentFrame,mpAtlas->GetCurrentMap(),mpKeyFrameDB);
-    mpLocalMapper->SubmitLineExtraction(pKF, mImGray);
+    if(mbLineFeatureEnabled)
+        mpLocalMapper->SubmitLineExtraction(pKF, mImGray);
 
     if(mpAtlas->isImuInitialized()) //  || mpLocalMapper->IsInitializing())
         pKF->bImu = true;

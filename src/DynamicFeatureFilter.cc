@@ -192,6 +192,8 @@ void DynamicFeatureFilter::ApplySampsonProbability(const std::vector<cv::Point2f
                                                     const std::vector<size_t> &currentIndices,
                                                     std::vector<float> &dynamicProbability) const
 {
+    if(!mConfig.enabled || !mConfig.sampsonEnabled)
+        return;
     if(previousPoints.size() != currentPoints.size() || currentPoints.size() != currentIndices.size() ||
        currentPoints.size() < 8)
         return;

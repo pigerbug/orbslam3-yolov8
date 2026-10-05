@@ -74,6 +74,7 @@ DynamicFilter:
   enabled: 1
   engine: "/home/nan/workspace/orbslam3-yolov8/models/yolov8n.engine"
   hardMask: 1
+  sampsonEnabled: 1
   yoloPrior: 0.70
   planeDistance: 0.05
 
@@ -87,6 +88,15 @@ GroundShadow:
   brightnessDiff: 12.0
   textureStd: 18.0
   geometryThreshold: 0.10
+
+# Master switch for persistent Manhattan plane extraction, plane immunity and
+# plane BA.  This must be disabled for the no-plane ablation baseline.
+ManhattanPlane:
+  enabled: 1
+
+# Master switch for LSD/LBD extraction and MapLine construction.
+LineFeature:
+  enabled: 1
 
 LineBA:
   enabled: 1

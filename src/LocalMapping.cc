@@ -64,7 +64,7 @@ bool BackProjectLineEndpoint(KeyFrame* kf, float u, float v, Eigen::Vector3f &wo
 LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular, bool bInertial, const string &_strSeqName):
     mpSystem(pSys), mbMonocular(bMonocular), mbInertial(bInertial), mbResetRequested(false), mbResetRequestedActiveMap(false), mbFinishRequested(false), mbFinished(true), mpAtlas(pAtlas), bInitializing(false),
     mbAbortBA(false), mbStopped(false), mbStopRequested(false), mbNotStop(false), mbAcceptKeyFrames(true), mbStopLineWorker(false),
-    mIdxInit(0), mScale(1.0), mInitSect(0), mbNotBA1(true), mbNotBA2(true), mIdxIteration(0), infoInertial(Eigen::MatrixXd::Zero(9,9))
+    mbLineFeatureEnabled(true), mbManhattanPlaneEnabled(true), mIdxInit(0), mScale(1.0), mInitSect(0), mbNotBA1(true), mbNotBA2(true), mIdxIteration(0), infoInertial(Eigen::MatrixXd::Zero(9,9))
 {
     mLineWorker = std::thread(&LocalMapping::LineWorkerLoop, this);
     mnMatchesInliers = 0;
@@ -85,7 +85,7 @@ LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular, 
 
 void LocalMapping::SubmitLineExtraction(KeyFrame* pKF, const cv::Mat &image)
 {
-    if(!pKF || image.empty()) return;
+    if(!mbLineFeatureEnabled || !pKF || image.empty()) return;
     std::lock_guard<std::mutex> lock(mMutexLineTasks);
     mLineTasks.clear();
     mLineTasks.push_back(LineTask{pKF, image.clone()});
@@ -408,7 +408,8 @@ void LocalMapping::ProcessNewKeyFrame()
 
     // Compute Bags of Words structures
     mpCurrentKeyFrame->ComputeBoW();
-    UpdateManhattanPlanes();
+    if(mbManhattanPlaneEnabled)
+        UpdateManhattanPlanes();
 
     // Associate MapPoints to the new keyframe and update normal and descriptor
     const vector<MapPoint*> vpMapPointMatches = mpCurrentKeyFrame->GetMapPointMatches();
@@ -1715,9 +1716,24 @@ KeyFrame* LocalMapping::GetCurrKF()
     return mpCurrentKeyFrame;
 }
 
+void LocalMapping::SetManhattanPlaneEnabled(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(mMutexManhattanPlanes);
+    mbManhattanPlaneEnabled=enabled;
+    if(!enabled) mvStableManhattanPlanes.clear();
+}
+
+void LocalMapping::SetLineFeatureEnabled(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(mMutexLineTasks);
+    mbLineFeatureEnabled=enabled;
+    if(!enabled) mLineTasks.clear();
+}
+
 std::vector<cv::Vec4f> LocalMapping::GetStableManhattanPlanes() const
 {
     std::lock_guard<std::mutex> lock(mMutexManhattanPlanes);
+    if(!mbManhattanPlaneEnabled) return std::vector<cv::Vec4f>();
     return mvStableManhattanPlanes;
 }
 

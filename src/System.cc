@@ -206,16 +206,30 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     cout << "Line BA: " << (lineBAEnabled ? "adaptive" : "disabled")
          << ", min static point edges=" << lineBAMinStaticPointEdges << endl;
 
+    bool lineFeatureEnabled = true;
+    cv::FileNode lineFeatureNode = fsSettings["LineFeature"];
+    if(!lineFeatureNode.empty() && !lineFeatureNode["enabled"].empty())
+        lineFeatureEnabled = static_cast<int>(lineFeatureNode["enabled"]) != 0;
+
+    bool manhattanPlaneEnabled = true;
+    cv::FileNode manhattanPlaneNode = fsSettings["ManhattanPlane"];
+    if(!manhattanPlaneNode.empty() && !manhattanPlaneNode["enabled"].empty())
+        manhattanPlaneEnabled = static_cast<int>(manhattanPlaneNode["enabled"]) != 0;
+
     bool planeBAEnabled = true;
     cv::FileNode planeBANode = fsSettings["PlaneBA"];
     if(!planeBANode.empty() && !planeBANode["enabled"].empty())
         planeBAEnabled = static_cast<int>(planeBANode["enabled"]) != 0;
+    planeBAEnabled = planeBAEnabled && manhattanPlaneEnabled;
     Optimizer::SetPlaneBAEnabled(planeBAEnabled);
+    cout << "Manhattan plane map: " << (manhattanPlaneEnabled ? "enabled" : "disabled") << endl;
     cout << "Plane BA: " << (planeBAEnabled ? "enabled" : "disabled") << endl;
 
     //Initialize the Local Mapping thread and launch
     mpLocalMapper = new LocalMapping(this, mpAtlas, mSensor==MONOCULAR || mSensor==IMU_MONOCULAR,
                                      mSensor==IMU_MONOCULAR || mSensor==IMU_STEREO || mSensor==IMU_RGBD, strSequence);
+    mpLocalMapper->SetManhattanPlaneEnabled(manhattanPlaneEnabled);
+    mpLocalMapper->SetLineFeatureEnabled(lineFeatureEnabled);
     mptLocalMapping = new thread(&ORB_SLAM3::LocalMapping::Run,mpLocalMapper);
     mpLocalMapper->mInitFr = initFr;
     if(settings_)
