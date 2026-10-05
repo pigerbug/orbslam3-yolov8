@@ -1103,8 +1103,23 @@ namespace ORB_SLAM3
                 resize(staticMask,staticMask,image.size(),0,0,INTER_NEAREST);
         }
 
+        // Build the pyramid from a texture-suppressed version of masked
+        // regions.  Filtering only after octree allocation lets a dynamic
+        // object consume most of the fixed ORB feature budget and leaves too
+        // few keypoints in the valid static region.  Blurring, rather than
+        // painting a constant value, avoids creating artificial box edges.
+        Mat featureImage=image;
+        if(!staticMask.empty())
+        {
+            Mat blurred, dynamicRegion;
+            GaussianBlur(image,blurred,Size(31,31),0,0,BORDER_REFLECT_101);
+            bitwise_not(staticMask,dynamicRegion);
+            featureImage=image.clone();
+            blurred.copyTo(featureImage,dynamicRegion);
+        }
+
         // Pre-compute the scale pyramid
-        ComputePyramid(image);
+        ComputePyramid(featureImage);
 
         vector < vector<KeyPoint> > allKeypoints;
         ComputeKeyPointsOctTree(allKeypoints);
