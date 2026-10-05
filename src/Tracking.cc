@@ -35,6 +35,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <iomanip>
 #include <map>
 #include <mutex>
 #include <chrono>
@@ -69,6 +71,10 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         if(!dynamicNode["planeDistance"].empty()) dynamicConfig.planeDistance = (float)dynamicNode["planeDistance"];
         if(!dynamicNode["starvationThreshold"].empty()) dynamicConfig.starvationThreshold = (int)dynamicNode["starvationThreshold"];
         if(!dynamicNode["resultWaitMs"].empty()) dynamicConfig.resultWaitMs = (int)dynamicNode["resultWaitMs"];
+        if(!dynamicNode["dumpProbabilities"].empty())
+            mbDumpDynamicProbabilities = static_cast<int>(dynamicNode["dumpProbabilities"]) != 0;
+        if(!dynamicNode["probabilityDumpPath"].empty())
+            mDynamicProbabilityDumpPath = static_cast<string>(dynamicNode["probabilityDumpPath"]);
         mDynamicFilter.Configure(dynamicConfig);
         if(dynamicConfig.enabled && !dynamicNode["engine"].empty())
         {
@@ -78,6 +84,11 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             else
                 cerr << "YOLOv8 TensorRT engine could not be loaded: " << enginePath << endl;
         }
+    }
+    if(mbDumpDynamicProbabilities && mDynamicProbabilityDumpPath.empty())
+    {
+        cerr << "Dynamic probability logging disabled: DynamicFilter.probabilityDumpPath is empty" << endl;
+        mbDumpDynamicProbabilities=false;
     }
 
     cv::FileNode shadowNode = dynamicSettings["GroundShadow"];
@@ -1734,6 +1745,58 @@ void Tracking::ApplyGroundShadowProbability()
     }
 }
 
+void Tracking::DumpDynamicProbabilityStats()
+{
+    // Per-feature files are intentionally opt-in: at 30 Hz this can write
+    // thousands of rows per second and is intended for ablation analysis only.
+    if(!mbDumpDynamicProbabilities || mDynamicFilter.UseHardMask() ||
+       mnLastDynamicProbabilityDumpFrameId==mCurrentFrame.mnId)
+        return;
+    mnLastDynamicProbabilityDumpFrameId=mCurrentFrame.mnId;
+
+    const std::string pointsPath=mDynamicProbabilityDumpPath+"/dynamic_probability_points.txt";
+    const std::string framesPath=mDynamicProbabilityDumpPath+"/dynamic_probability_frames.txt";
+    std::ofstream points(pointsPath.c_str(),std::ios::out|std::ios::app);
+    std::ofstream frames(framesPath.c_str(),std::ios::out|std::ios::app);
+    if(!points.is_open() || !frames.is_open())
+    {
+        cerr << "Cannot write dynamic probability logs under: " << mDynamicProbabilityDumpPath << endl;
+        mbDumpDynamicProbabilities=false;
+        return;
+    }
+    if(!mbDynamicProbabilityLogHeaderWritten)
+    {
+        points << "# frame_id timestamp feature_index u v p_dynamic optimization_weight manhattan_immune mapping_dynamic has_map_point\n";
+        frames << "# frame_id timestamp features nonzero_probability mapping_dynamic manhattan_immune mean_probability mean_weight\n";
+        mbDynamicProbabilityLogHeaderWritten=true;
+    }
+
+    const size_t count=std::min(mCurrentFrame.mvKeysUn.size(),mCurrentFrame.mvDynamicProbability.size());
+    size_t nonzero=0, mappingDynamic=0, immune=0;
+    double probabilitySum=0.0, weightSum=0.0;
+    points << std::fixed << std::setprecision(6);
+    for(size_t i=0; i<count; ++i)
+    {
+        const float probability=mCurrentFrame.mvDynamicProbability[i];
+        const double weight=std::max(0.05,1.0-static_cast<double>(probability));
+        const int isImmune=(i<mCurrentFrame.mvbManhattanImmune.size() && mCurrentFrame.mvbManhattanImmune[i]) ? 1 : 0;
+        const int isMappingDynamic=(i<mCurrentFrame.mvbDynamicForMapping.size() && mCurrentFrame.mvbDynamicForMapping[i]) ? 1 : 0;
+        const int hasMapPoint=(i<mCurrentFrame.mvpMapPoints.size() && mCurrentFrame.mvpMapPoints[i]) ? 1 : 0;
+        points << mCurrentFrame.mnId << ' ' << mCurrentFrame.mTimeStamp << ' ' << i << ' '
+               << mCurrentFrame.mvKeysUn[i].pt.x << ' ' << mCurrentFrame.mvKeysUn[i].pt.y << ' '
+               << probability << ' ' << weight << ' ' << isImmune << ' ' << isMappingDynamic << ' ' << hasMapPoint << '\n';
+        probabilitySum+=probability;
+        weightSum+=weight;
+        if(probability>0.0f) ++nonzero;
+        if(isMappingDynamic) ++mappingDynamic;
+        if(isImmune) ++immune;
+    }
+    frames << std::fixed << std::setprecision(6)
+           << mCurrentFrame.mnId << ' ' << mCurrentFrame.mTimeStamp << ' ' << count << ' '
+           << nonzero << ' ' << mappingDynamic << ' ' << immune << ' '
+           << (count ? probabilitySum/count : 0.0) << ' ' << (count ? weightSum/count : 0.0) << '\n';
+}
+
 void Tracking::RejectDynamicMapPointObservations()
 {
     for(size_t i = 0; i < mCurrentFrame.mvpMapPoints.size(); ++i)
@@ -3110,6 +3173,7 @@ bool Tracking::TrackReferenceKeyFrame()
     UpdateGeometricDynamicPrior();
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
+    DumpDynamicProbabilityStats();
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
     RefinePoseWithLines();
@@ -3279,6 +3343,7 @@ bool Tracking::TrackWithMotionModel()
     UpdateGeometricDynamicPrior();
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
+    DumpDynamicProbabilityStats();
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
     RefinePoseWithLines();
@@ -3345,6 +3410,7 @@ bool Tracking::TrackLocalMap()
     UpdateGeometricDynamicPrior();
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
+    DumpDynamicProbabilityStats();
     RejectDynamicMapPointObservations();
     int inliers;
     if (!mpAtlas->isImuInitialized())

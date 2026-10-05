@@ -218,6 +218,7 @@ protected:
     void UpdateGeometricDynamicPrior();
     void ApplyPersistentManhattanImmunity();
     void ApplyGroundShadowProbability();
+    void DumpDynamicProbabilityStats();
     void RejectDynamicMapPointObservations();
     void RefinePoseWithLines();
 
@@ -271,6 +272,10 @@ protected:
     ORBextractor* mpORBextractorLeft, *mpORBextractorRight;
     ORBextractor* mpIniORBextractor;
     DynamicFeatureFilter mDynamicFilter;
+    bool mbDumpDynamicProbabilities = false;
+    bool mbDynamicProbabilityLogHeaderWritten = false;
+    unsigned long mnLastDynamicProbabilityDumpFrameId = static_cast<unsigned long>(-1);
+    std::string mDynamicProbabilityDumpPath;
     bool mbLineFeatureEnabled = true;
     bool mbManhattanPlaneEnabled = true;
     // Evaluated in Tracking because it requires the current pose and the
