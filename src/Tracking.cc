@@ -91,6 +91,16 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         mbDumpDynamicProbabilities=false;
     }
 
+    cv::FileNode recoveryNode = dynamicSettings["DynamicRecovery"];
+    if(!recoveryNode.empty())
+    {
+        if(!recoveryNode["enabled"].empty()) mbDepthRecoveryEnabled = static_cast<int>(recoveryNode["enabled"]) != 0;
+        if(!recoveryNode["minStaticMapMatches"].empty())
+            mnRecoveryMinStaticMapMatches = std::max(0,static_cast<int>(recoveryNode["minStaticMapMatches"]));
+        if(!recoveryNode["backgroundDepthGap"].empty())
+            mRecoveryBackgroundDepthGap = std::max(0.0f,static_cast<float>(recoveryNode["backgroundDepthGap"]));
+    }
+
     cv::FileNode shadowNode = dynamicSettings["GroundShadow"];
     if(!shadowNode.empty())
     {
@@ -1534,6 +1544,53 @@ void Tracking::PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImag
         boxes.clear();
 }
 
+void Tracking::RecoverDepthBackgroundInDynamicMask(cv::Mat &dynamicMask, const cv::Mat &depth,
+                                                    const std::vector<YoloBoundingBox> &boxes)
+{
+    if(!mbDepthRecoveryEnabled || !mDynamicFilter.UseHardMask() || dynamicMask.empty() ||
+       depth.empty() || depth.type()!=CV_32F || boxes.empty())
+        return;
+
+    int lastStaticMapMatches=0;
+    for(size_t i=0; i<mLastFrame.mvpMapPoints.size(); ++i)
+        if(mLastFrame.mvpMapPoints[i] &&
+           (i>=mLastFrame.mvbDynamicForMapping.size() || !mLastFrame.mvbDynamicForMapping[i]))
+            ++lastStaticMapMatches;
+    if(lastStaticMapMatches>=mnRecoveryMinStaticMapMatches)
+        return;
+
+    for(size_t boxIndex=0; boxIndex<boxes.size(); ++boxIndex)
+    {
+        const cv::Rect box=cv::Rect(cvRound(boxes[boxIndex].rect.x),cvRound(boxes[boxIndex].rect.y),
+                                    cvRound(boxes[boxIndex].rect.width),cvRound(boxes[boxIndex].rect.height)) &
+                           cv::Rect(0,0,depth.cols,depth.rows);
+        if(box.area()<=0) continue;
+
+        // The lower depth quartile over the central part is a conservative
+        // foreground estimate: background behind a person is normally farther.
+        std::vector<float> centerDepths;
+        const cv::Rect center(box.x+box.width/4,box.y+box.height/4,
+                              std::max(1,box.width/2),std::max(1,box.height/2));
+        for(int y=center.y; y<center.y+center.height && y<depth.rows; y+=3)
+            for(int x=center.x; x<center.x+center.width && x<depth.cols; x+=3)
+            {
+                const float z=depth.at<float>(y,x);
+                if(std::isfinite(z) && z>0.0f) centerDepths.push_back(z);
+            }
+        if(centerDepths.size()<8) continue;
+        std::nth_element(centerDepths.begin(),centerDepths.begin()+centerDepths.size()/4,centerDepths.end());
+        const float foregroundDepth=centerDepths[centerDepths.size()/4];
+
+        for(int y=box.y; y<box.y+box.height; ++y)
+            for(int x=box.x; x<box.x+box.width; ++x)
+            {
+                const float z=depth.at<float>(y,x);
+                if(std::isfinite(z) && z>=foregroundDepth+mRecoveryBackgroundDepthGap)
+                    dynamicMask.at<unsigned char>(y,x)=0;
+            }
+    }
+}
+
 void Tracking::ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth)
 {
     const std::vector<cv::KeyPoint> *previousKeys = mLastFrame.mvKeysUn.empty() ? NULL : &mLastFrame.mvKeysUn;
@@ -1948,6 +2005,9 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
     cv::Mat staticMask,dynamicMask;
     std::vector<YoloBoundingBox> dynamicBoxes;
     PrepareDynamicMask(++mnDynamicInputFrameId,imRGB,dynamicMask,staticMask,dynamicBoxes);
+    RecoverDepthBackgroundInDynamicMask(dynamicMask,imDepth,dynamicBoxes);
+    if(mDynamicFilter.UseHardMask() && !dynamicMask.empty())
+        cv::bitwise_not(dynamicMask,staticMask);
 
     if (mSensor == System::RGBD)
         mCurrentFrame = Frame(mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,NULL,IMU::Calib(),staticMask);

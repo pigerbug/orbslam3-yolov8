@@ -214,6 +214,8 @@ protected:
     void PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImage, cv::Mat &dynamicMask,
                             cv::Mat &staticMask,
                             std::vector<YoloBoundingBox> &boxes);
+    void RecoverDepthBackgroundInDynamicMask(cv::Mat &dynamicMask, const cv::Mat &depth,
+                                             const std::vector<YoloBoundingBox> &boxes);
     void ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth = cv::Mat());
     void UpdateGeometricDynamicPrior();
     void ApplyPersistentManhattanImmunity();
@@ -276,6 +278,9 @@ protected:
     bool mbDynamicProbabilityLogHeaderWritten = false;
     unsigned long mnLastDynamicProbabilityDumpFrameId = static_cast<unsigned long>(-1);
     std::string mDynamicProbabilityDumpPath;
+    bool mbDepthRecoveryEnabled = false;
+    int mnRecoveryMinStaticMapMatches = 60;
+    float mRecoveryBackgroundDepthGap = 0.15f;
     bool mbLineFeatureEnabled = true;
     bool mbManhattanPlaneEnabled = true;
     // Evaluated in Tracking because it requires the current pose and the

@@ -82,6 +82,13 @@ DynamicFilter:
   yoloPrior: 0.70
   planeDistance: 0.05
 
+# Only when hard-mask tracking is starved, use RGB-D to reopen pixels that
+# are clearly behind the dynamic foreground. They are treated as background.
+DynamicRecovery:
+  enabled: 0
+  minStaticMapMatches: 60
+  backgroundDepthGap: 0.15
+
 # Conservative ground-contact shadow probability; set enabled: 0 to restore
 # the pre-shadow baseline.
 GroundShadow:
