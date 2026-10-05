@@ -283,11 +283,19 @@ bool DynamicFeatureFilter::InferDynamicMask(const cv::Mat &image, cv::Mat &mask,
     if(!mpYoloDetector || image.empty() || !mpYoloDetector->Detect(image, boxes))
         return false;
 
+    // Detect() deliberately exposes every model class.  The SLAM front end,
+    // visualization and ground-shadow model must receive only classes that
+    // are treated as potentially moving by this system.
+    std::vector<YoloBoundingBox> dynamicBoxes;
+    dynamicBoxes.reserve(boxes.size());
+    for(size_t i = 0; i < boxes.size(); ++i)
+        if(YoloDetector::IsDynamicClass(boxes[i].classId))
+            dynamicBoxes.push_back(boxes[i]);
+    boxes.swap(dynamicBoxes);
+
     mask = cv::Mat::zeros(image.size(), CV_8U);
     for(size_t i = 0; i < boxes.size(); ++i)
     {
-        if(!YoloDetector::IsDynamicClass(boxes[i].classId))
-            continue;
         const cv::Rect box = cv::Rect(cvRound(boxes[i].rect.x), cvRound(boxes[i].rect.y),
                                       cvRound(boxes[i].rect.width), cvRound(boxes[i].rect.height)) &
                              cv::Rect(0, 0, image.cols, image.rows);

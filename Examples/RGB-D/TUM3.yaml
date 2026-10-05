@@ -75,8 +75,8 @@ DynamicFilter:
   engine: "/home/nan/workspace/orbslam3-yolov8/models/yolov8n.engine"
   hardMask: 1
   sampsonEnabled: 1
-  # Set to 1 only for soft-probability analysis (hardMask must be 0).
-  # Create this directory before running; logging has a measurable I/O cost.
+  # Set to 1 for probability analysis. With hardMask: 1, masked features do
+  # not exist in the log; create this directory before running.
   dumpProbabilities: 0
   probabilityDumpPath: "/home/nan/workspace/orbslam3-yolov8/logs"
   yoloPrior: 0.70

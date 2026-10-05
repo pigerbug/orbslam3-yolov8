@@ -1749,7 +1749,7 @@ void Tracking::DumpDynamicProbabilityStats()
 {
     // Per-feature files are intentionally opt-in: at 30 Hz this can write
     // thousands of rows per second and is intended for ablation analysis only.
-    if(!mbDumpDynamicProbabilities || mDynamicFilter.UseHardMask() ||
+    if(!mbDumpDynamicProbabilities ||
        mnLastDynamicProbabilityDumpFrameId==mCurrentFrame.mnId)
         return;
     mnLastDynamicProbabilityDumpFrameId=mCurrentFrame.mnId;
