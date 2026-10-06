@@ -78,7 +78,8 @@ OcclusionMode:
   reprojectionResidual: 12.0
   semanticCoverage: 0.70
   recoveryFrames: 3
-  maxHoldFrames: 60
+  holdOnSuddenLoss: 0
+  maxHoldFrames: 10
 
 GroundShadow:
   enabled: 0

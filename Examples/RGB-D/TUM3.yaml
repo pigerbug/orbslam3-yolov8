@@ -100,7 +100,10 @@ OcclusionMode:
   reprojectionResidual: 12.0
   semanticCoverage: 0.70
   recoveryFrames: 3
-  maxHoldFrames: 60
+  # Do not treat a generic tracking failure as an occlusion in pure RGB-D.
+  # Enable only for a dedicated full-occlusion experiment.
+  holdOnSuddenLoss: 0
+  maxHoldFrames: 10
 
 # Conservative ground-contact shadow probability; set enabled: 0 to restore
 # the pre-shadow baseline.

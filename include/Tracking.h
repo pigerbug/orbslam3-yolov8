@@ -294,6 +294,10 @@ protected:
     int mnRecoveryMinStaticMapMatches = 60;
     float mRecoveryBackgroundDepthGap = 0.15f;
     bool mbOcclusionModeEnabled = false;
+    // A failed match alone is ambiguous in pure RGB-D (motion blur, lighting
+    // and fast rotation look identical to a full occlusion).  Keep this
+    // fallback opt-in; normal operation requires geometric/semantic evidence.
+    bool mbOcclusionHoldOnSuddenLoss = false;
     bool mbOcclusionMode = false;
     bool mbOcclusionFrame = false;
     int mnOcclusionFrames = 0;
@@ -301,7 +305,7 @@ protected:
     int mnOcclusionMinStaticMatches = 20;
     int mnOcclusionMinUnknownMatches = 20;
     int mnOcclusionRecoveryRequiredFrames = 3;
-    int mnOcclusionMaxHoldFrames = 60;
+    int mnOcclusionMaxHoldFrames = 10;
     float mOcclusionUnknownFraction = 0.60f;
     float mOcclusionDepthResidual = 0.12f;
     float mOcclusionReprojectionResidual = 12.0f;

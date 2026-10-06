@@ -106,6 +106,7 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     if(!occlusionNode.empty())
     {
         if(!occlusionNode["enabled"].empty()) mbOcclusionModeEnabled = static_cast<int>(occlusionNode["enabled"]) != 0;
+        if(!occlusionNode["holdOnSuddenLoss"].empty()) mbOcclusionHoldOnSuddenLoss = static_cast<int>(occlusionNode["holdOnSuddenLoss"]) != 0;
         if(!occlusionNode["minStaticMatches"].empty()) mnOcclusionMinStaticMatches = std::max(5,static_cast<int>(occlusionNode["minStaticMatches"]));
         if(!occlusionNode["minUnknownMatches"].empty()) mnOcclusionMinUnknownMatches = std::max(5,static_cast<int>(occlusionNode["minUnknownMatches"]));
         if(!occlusionNode["recoveryFrames"].empty()) mnOcclusionRecoveryRequiredFrames = std::max(1,static_cast<int>(occlusionNode["recoveryFrames"]));
@@ -2802,7 +2803,7 @@ void Tracking::Track()
         // all, so residual-based unknown-motion evidence is unavailable.
         // If a previously well-supported map suddenly loses all support,
         // enter the same bounded hold rather than immediately resetting it.
-        if(mbOcclusionModeEnabled && !mbOcclusionMode && !mbOcclusionFrame && !bOK && mLastFrame.isSet())
+        if(mbOcclusionModeEnabled && mbOcclusionHoldOnSuddenLoss && !mbOcclusionMode && !mbOcclusionFrame && !bOK && mLastFrame.isSet())
         {
             int previousStaticMatches = 0;
             for(size_t i = 0; i < mLastFrame.mvpMapPoints.size(); ++i)
