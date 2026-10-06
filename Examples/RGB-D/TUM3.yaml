@@ -88,6 +88,7 @@ DynamicRecovery:
   enabled: 0
   minStaticMapMatches: 60
   backgroundDepthGap: 0.15
+  poseProbability: 0.45
 
 # Unknown-object / full-occlusion protection.  It freezes map growth and
 # uses only a bounded constant-velocity hold when static support disappears.

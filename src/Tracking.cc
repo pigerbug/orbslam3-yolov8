@@ -100,6 +100,8 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             mnRecoveryMinStaticMapMatches = std::max(0,static_cast<int>(recoveryNode["minStaticMapMatches"]));
         if(!recoveryNode["backgroundDepthGap"].empty())
             mRecoveryBackgroundDepthGap = std::max(0.0f,static_cast<float>(recoveryNode["backgroundDepthGap"]));
+        if(!recoveryNode["poseProbability"].empty())
+            mRecoveryPoseProbability = std::min(0.54f,std::max(0.0f,static_cast<float>(recoveryNode["poseProbability"])));
     }
 
     cv::FileNode occlusionNode = dynamicSettings["OcclusionMode"];
@@ -1573,9 +1575,10 @@ void Tracking::PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImag
         boxes.clear();
 }
 
-void Tracking::RecoverDepthBackgroundInDynamicMask(cv::Mat &dynamicMask, const cv::Mat &depth,
+void Tracking::RecoverDepthBackgroundInDynamicMask(cv::Mat &dynamicMask, cv::Mat &recoveredBackgroundMask, const cv::Mat &depth,
                                                     const std::vector<YoloBoundingBox> &boxes)
 {
+    recoveredBackgroundMask.release();
     if(!mbDepthRecoveryEnabled || !mDynamicFilter.UseHardMask() || dynamicMask.empty() ||
        depth.empty() || depth.type()!=CV_32F || boxes.empty())
         return;
@@ -1588,6 +1591,7 @@ void Tracking::RecoverDepthBackgroundInDynamicMask(cv::Mat &dynamicMask, const c
     if(lastStaticMapMatches>=mnRecoveryMinStaticMapMatches)
         return;
 
+    recoveredBackgroundMask=cv::Mat::zeros(dynamicMask.size(),CV_8UC1);
     for(size_t boxIndex=0; boxIndex<boxes.size(); ++boxIndex)
     {
         const cv::Rect box=cv::Rect(cvRound(boxes[boxIndex].rect.x),cvRound(boxes[boxIndex].rect.y),
@@ -1615,20 +1619,56 @@ void Tracking::RecoverDepthBackgroundInDynamicMask(cv::Mat &dynamicMask, const c
             {
                 const float z=depth.at<float>(y,x);
                 if(std::isfinite(z) && z>=foregroundDepth+mRecoveryBackgroundDepthGap)
+                {
                     dynamicMask.at<unsigned char>(y,x)=0;
+                    recoveredBackgroundMask.at<unsigned char>(y,x)=255;
+                }
             }
     }
 }
 
-void Tracking::ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth)
+void Tracking::ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth,
+                                 const cv::Mat &recoveredBackgroundMask)
 {
     const std::vector<cv::KeyPoint> *previousKeys = mLastFrame.mvKeysUn.empty() ? NULL : &mLastFrame.mvKeysUn;
     mDynamicFilter.Evaluate(dynamicMask, depth, mCurrentFrame.mK, mCurrentFrame.mvKeysUn, previousKeys,
                             mCurrentFrame.mvDynamicProbability, mCurrentFrame.mvbManhattanImmune);
     mCurrentFrame.mvbDynamicForMapping.resize(mCurrentFrame.mvDynamicProbability.size(), 0);
+    mCurrentFrame.mvbRecoveredBackground.assign(mCurrentFrame.mvDynamicProbability.size(), 0);
     for(size_t i = 0; i < mCurrentFrame.mvDynamicProbability.size(); ++i)
+    {
         mCurrentFrame.mvbDynamicForMapping[i] = mDynamicFilter.IsDynamicForMapping(
             mCurrentFrame.mvDynamicProbability[i], mCurrentFrame.mvbManhattanImmune[i]);
+        if(!recoveredBackgroundMask.empty() && i<mCurrentFrame.mvKeysUn.size())
+        {
+            const cv::Point2f &point=mCurrentFrame.mvKeysUn[i].pt;
+            const int x=cvRound(point.x), y=cvRound(point.y);
+            if(x>=0 && y>=0 && x<recoveredBackgroundMask.cols && y<recoveredBackgroundMask.rows &&
+               recoveredBackgroundMask.at<unsigned char>(y,x))
+            {
+                mCurrentFrame.mvbRecoveredBackground[i]=1;
+                mCurrentFrame.mvDynamicProbability[i]=std::max(mCurrentFrame.mvDynamicProbability[i],mRecoveryPoseProbability);
+                // Mapping remains blocked until a later frame confirms an
+                // existing static MapPoint association.
+                mCurrentFrame.mvbDynamicForMapping[i]=1;
+            }
+        }
+    }
+}
+
+void Tracking::PromoteRecoveredBackgroundMatches()
+{
+    for(size_t i=0; i<mCurrentFrame.mvbRecoveredBackground.size(); ++i)
+    {
+        if(!mCurrentFrame.mvbRecoveredBackground[i] || i>=mCurrentFrame.mvpMapPoints.size()) continue;
+        MapPoint *pMP=mCurrentFrame.mvpMapPoints[i];
+        if(!pMP || pMP->isBad() || pMP->Observations()<=0) continue;
+        mCurrentFrame.mvbRecoveredBackground[i]=0;
+        if(i<mCurrentFrame.mvDynamicProbability.size())
+            mCurrentFrame.mvDynamicProbability[i]=std::min(mCurrentFrame.mvDynamicProbability[i],0.15f);
+        if(i<mCurrentFrame.mvbDynamicForMapping.size())
+            mCurrentFrame.mvbDynamicForMapping[i]=0;
+    }
 }
 
 void Tracking::UpdateGeometricDynamicPrior()
@@ -1657,7 +1697,8 @@ void Tracking::UpdateGeometricDynamicPrior()
                                            mCurrentFrame.mvDynamicProbability);
     for(size_t i = 0; i < mCurrentFrame.mvDynamicProbability.size(); ++i)
         mCurrentFrame.mvbDynamicForMapping[i] = mDynamicFilter.IsDynamicForMapping(
-            mCurrentFrame.mvDynamicProbability[i], mCurrentFrame.mvbManhattanImmune[i]);
+            mCurrentFrame.mvDynamicProbability[i], mCurrentFrame.mvbManhattanImmune[i]) ||
+            (i<mCurrentFrame.mvbRecoveredBackground.size() && mCurrentFrame.mvbRecoveredBackground[i]);
 }
 
 void Tracking::ApplyPersistentManhattanImmunity()
@@ -1680,7 +1721,8 @@ void Tracking::ApplyPersistentManhattanImmunity()
     }
     for(size_t i = 0; i < mCurrentFrame.mvDynamicProbability.size(); ++i)
         mCurrentFrame.mvbDynamicForMapping[i] = mDynamicFilter.IsDynamicForMapping(
-            mCurrentFrame.mvDynamicProbability[i], mCurrentFrame.mvbManhattanImmune[i]);
+            mCurrentFrame.mvDynamicProbability[i], mCurrentFrame.mvbManhattanImmune[i]) ||
+            (i<mCurrentFrame.mvbRecoveredBackground.size() && mCurrentFrame.mvbRecoveredBackground[i]);
 }
 
 void Tracking::ApplyGroundShadowProbability()
@@ -1886,7 +1928,8 @@ void Tracking::DumpDynamicProbabilityStats()
 void Tracking::RejectDynamicMapPointObservations()
 {
     for(size_t i = 0; i < mCurrentFrame.mvpMapPoints.size(); ++i)
-        if(i < mCurrentFrame.mvbDynamicForMapping.size() && mCurrentFrame.mvbDynamicForMapping[i])
+        if(i < mCurrentFrame.mvbDynamicForMapping.size() && mCurrentFrame.mvbDynamicForMapping[i] &&
+           !(i < mCurrentFrame.mvbRecoveredBackground.size() && mCurrentFrame.mvbRecoveredBackground[i]))
         {
             mCurrentFrame.mvpMapPoints[i] = static_cast<MapPoint*>(NULL);
             mCurrentFrame.mvbOutlier[i] = true;
@@ -2153,7 +2196,7 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat 
         }
     }
 
-    cv::Mat staticMask,dynamicMask;
+    cv::Mat staticMask,dynamicMask,recoveredBackgroundMask;
     std::vector<YoloBoundingBox> dynamicBoxes;
     PrepareDynamicMask(++mnDynamicInputFrameId,imRectLeft,dynamicMask,staticMask,dynamicBoxes);
 
@@ -2211,10 +2254,10 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
     if((fabs(mDepthMapFactor-1.0f)>1e-5) || imDepth.type()!=CV_32F)
         imDepth.convertTo(imDepth,CV_32F,mDepthMapFactor);
 
-    cv::Mat staticMask,dynamicMask;
+    cv::Mat staticMask,dynamicMask,recoveredBackgroundMask;
     std::vector<YoloBoundingBox> dynamicBoxes;
     PrepareDynamicMask(++mnDynamicInputFrameId,imRGB,dynamicMask,staticMask,dynamicBoxes);
-    RecoverDepthBackgroundInDynamicMask(dynamicMask,imDepth,dynamicBoxes);
+    RecoverDepthBackgroundInDynamicMask(dynamicMask,recoveredBackgroundMask,imDepth,dynamicBoxes);
     if(mDynamicFilter.UseHardMask() && !dynamicMask.empty())
         cv::bitwise_not(dynamicMask,staticMask);
 
@@ -2233,7 +2276,7 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
     mCurrentFrame.mNameFile = filename;
     mCurrentFrame.mnDataset = mnNumDataset;
     mCurrentFrame.mvDynamicBoxes = dynamicBoxes;
-    ApplyDynamicPrior(dynamicMask, imDepth);
+    ApplyDynamicPrior(dynamicMask, imDepth, recoveredBackgroundMask);
 
 #ifdef REGISTER_TIMES
     vdORBExtract_ms.push_back(mCurrentFrame.mTimeORB_Ext);
@@ -3804,6 +3847,10 @@ bool Tracking::TrackLocalMap()
         }
     }
     RefinePoseWithLines();
+    // A recovered background feature first contributes with its reduced pose
+    // weight.  Only after the final pose step may an existing static-map
+    // association promote it back to a normal observation.
+    PromoteRecoveredBackgroundMatches();
 
     aux1 = 0, aux2 = 0;
     for(int i=0; i<mCurrentFrame.N; i++)

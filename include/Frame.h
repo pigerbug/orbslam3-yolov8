@@ -237,6 +237,10 @@ public:
     std::vector<float> mvDynamicProbability;
     std::vector<unsigned char> mvbManhattanImmune;
     std::vector<unsigned char> mvbDynamicForMapping;
+    // Features reopened behind a semantic foreground by RGB-D depth.  They
+    // may support the current pose, but cannot create persistent map state
+    // until they match an existing static MapPoint in a later frame.
+    std::vector<unsigned char> mvbRecoveredBackground;
     std::vector<YoloBoundingBox> mvDynamicBoxes;
 
     // Corresponding stereo coordinate and depth for each keypoint.

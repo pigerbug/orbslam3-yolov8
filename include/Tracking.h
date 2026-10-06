@@ -215,9 +215,11 @@ protected:
     void PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImage, cv::Mat &dynamicMask,
                             cv::Mat &staticMask,
                             std::vector<YoloBoundingBox> &boxes);
-    void RecoverDepthBackgroundInDynamicMask(cv::Mat &dynamicMask, const cv::Mat &depth,
+    void RecoverDepthBackgroundInDynamicMask(cv::Mat &dynamicMask, cv::Mat &recoveredBackgroundMask, const cv::Mat &depth,
                                              const std::vector<YoloBoundingBox> &boxes);
-    void ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth = cv::Mat());
+    void ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth = cv::Mat(),
+                           const cv::Mat &recoveredBackgroundMask = cv::Mat());
+    void PromoteRecoveredBackgroundMatches();
     void UpdateGeometricDynamicPrior();
     void ApplyPersistentManhattanImmunity();
     void ApplyGroundShadowProbability();
@@ -293,6 +295,7 @@ protected:
     bool mbDepthRecoveryEnabled = false;
     int mnRecoveryMinStaticMapMatches = 60;
     float mRecoveryBackgroundDepthGap = 0.15f;
+    float mRecoveryPoseProbability = 0.45f;
     bool mbOcclusionModeEnabled = false;
     // A failed match alone is ambiguous in pure RGB-D (motion blur, lighting
     // and fast rotation look identical to a full occlusion).  Keep this
