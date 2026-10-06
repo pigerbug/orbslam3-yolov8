@@ -1948,23 +1948,31 @@ void Tracking::ApplyUnknownMotionPrior()
             unknownIndices.push_back(i);
     }
 
-    float semanticCoverage = 0.0f;
     const int imageWidth = std::max(1, mImGray.cols);
     const int imageHeight = std::max(1, mImGray.rows);
     const float imageArea = static_cast<float>(imageWidth * imageHeight);
+    // Use the union of dynamic boxes.  Summing box areas makes overlapping
+    // people in a crowd look like a full-image occlusion.
+    cv::Mat semanticMask(imageHeight, imageWidth, CV_8UC1, cv::Scalar(0));
     for(size_t i = 0; i < mCurrentFrame.mvDynamicBoxes.size(); ++i)
     {
         const cv::Rect2f clipped = mCurrentFrame.mvDynamicBoxes[i].rect &
             cv::Rect2f(0.0f,0.0f,static_cast<float>(imageWidth),static_cast<float>(imageHeight));
-        semanticCoverage += std::max(0.0f,clipped.width) * std::max(0.0f,clipped.height) / imageArea;
+        if(clipped.width <= 0.0f || clipped.height <= 0.0f) continue;
+        const int x0 = std::max(0, cvFloor(clipped.x));
+        const int y0 = std::max(0, cvFloor(clipped.y));
+        const int x1 = std::min(imageWidth, cvCeil(clipped.x + clipped.width));
+        const int y1 = std::min(imageHeight, cvCeil(clipped.y + clipped.height));
+        if(x1 > x0 && y1 > y0)
+            cv::rectangle(semanticMask, cv::Rect(x0,y0,x1-x0,y1-y0), cv::Scalar(255), cv::FILLED);
     }
-    semanticCoverage = std::min(1.0f,semanticCoverage);
+    const float semanticCoverage = static_cast<float>(cv::countNonZero(semanticMask)) / imageArea;
     const float unknownFraction = matchedStaticMapPoints > 0 ?
         static_cast<float>(unknownIndices.size()) / matchedStaticMapPoints : 0.0f;
     const bool coherentUnknownMotion = static_cast<int>(unknownIndices.size()) >= mnOcclusionMinUnknownMatches &&
                                        unknownFraction >= mOcclusionUnknownFraction;
-    const bool semanticOcclusion = semanticCoverage >= mOcclusionSemanticCoverage;
-    if(!coherentUnknownMotion && !semanticOcclusion)
+    const bool largeSemanticForeground = semanticCoverage >= mOcclusionSemanticCoverage;
+    if(!coherentUnknownMotion && !largeSemanticForeground)
         return;
 
     for(size_t k = 0; k < unknownIndices.size(); ++k)
@@ -1974,11 +1982,15 @@ void Tracking::ApplyUnknownMotionPrior()
         mCurrentFrame.mvbDynamicForMapping[i] = 1;
     }
     const int survivingStatic = matchedStaticMapPoints - static_cast<int>(unknownIndices.size());
-    mbOcclusionFrame = semanticOcclusion || survivingStatic < mnOcclusionMinStaticMatches;
+    // A large foreground alone is not a full occlusion if enough static map
+    // support remains.  That distinction is essential for crowd sequences.
+    mbOcclusionFrame = survivingStatic < mnOcclusionMinStaticMatches &&
+                       (coherentUnknownMotion || largeSemanticForeground);
     if(mbOcclusionFrame)
         Verbose::PrintMess("Occlusion mode candidate: " + to_string(unknownIndices.size()) +
                            " unknown-motion matches, " + to_string(survivingStatic) +
-                           " static matches", Verbose::VERBOSITY_NORMAL);
+                           " static matches, coverage " + to_string(semanticCoverage),
+                           Verbose::VERBOSITY_NORMAL);
 }
 
 void Tracking::RefinePoseWithLines()
