@@ -3156,7 +3156,10 @@ void Tracking::Track()
             mlRelativeFramePoses.push_back(Tcr_);
             mlpReferences.push_back(mCurrentFrame.mpReferenceKF);
             mlFrameTimes.push_back(mCurrentFrame.mTimeStamp);
-            mlbLost.push_back(mState==LOST);
+            // RECENTLY_LOST poses are motion-model predictions retained for
+            // internal recovery. They are not visually verified estimates
+            // and must not be exported as valid trajectory samples for ATE.
+            mlbLost.push_back(mState!=OK);
         }
         else
         {
@@ -3164,7 +3167,7 @@ void Tracking::Track()
             mlRelativeFramePoses.push_back(mlRelativeFramePoses.back());
             mlpReferences.push_back(mlpReferences.back());
             mlFrameTimes.push_back(mlFrameTimes.back());
-            mlbLost.push_back(mState==LOST);
+            mlbLost.push_back(mState!=OK);
         }
 
     }
