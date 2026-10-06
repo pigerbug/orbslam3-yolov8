@@ -1604,9 +1604,27 @@ void Tracking::PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImag
                                                                  mDynamicFilter.ResultWaitMs(), dynamicMask, boxes);
     if(hasDetections && mDynamicFilter.UseHardMask())
     {
-        // Main ORB always excludes detected instances.  Probe constraints
-        // are pose-only and must never leak into mapping or keyframes.
-        cv::bitwise_not(dynamicMask,staticMask);
+        cv::Mat mask=dynamicMask.clone();
+        // A class label is never sufficient to release a box.  It is opened
+        // only when its *previous* RGB-D probe state has already accumulated
+        // three consecutive static decisions.  A strong-motion decision
+        // changes the state before the following image reaches this point,
+        // so the box is hard-masked again immediately on the next frame.
+        if(mbInstanceMotionEnabled)
+            for(size_t i=0;i<boxes.size();++i)
+                for(size_t j=0;j<mvProbeStates.size();++j)
+                    if(mvProbeStates[j].state==1 && mvProbeStates[j].staticStreak>=3)
+                    {
+                        const cv::Rect2f inter=boxes[i].rect & mvProbeStates[j].rect;
+                        const float uni=boxes[i].rect.area()+mvProbeStates[j].rect.area()-inter.area();
+                        if(uni>0.f && inter.area()/uni>0.15f)
+                        {
+                            cv::rectangle(mask,boxes[i].rect,cv::Scalar(0),cv::FILLED);
+                            cout << "Probe static instance released to main tracking" << endl;
+                            break;
+                        }
+                    }
+        cv::bitwise_not(mask,staticMask);
     }
     if(!hasDetections)
         boxes.clear();
@@ -1994,18 +2012,22 @@ void Tracking::ApplyStaticProbeAssist()
     if(!mbInstanceMotionEnabled) return;
     for(size_t b=0;b<mCurrentFrame.mvDynamicBoxes.size();++b) {
         bool stable=false;
-        for(size_t j=0;j<mvProbeStates.size();++j) if(mvProbeStates[j].state==1) {
+        for(size_t j=0;j<mvProbeStates.size();++j)
+            if(mvProbeStates[j].state==1 && mvProbeStates[j].staticStreak>=3) {
             cv::Rect2f in=mCurrentFrame.mvDynamicBoxes[b].rect & mvProbeStates[j].rect;
             float u=mCurrentFrame.mvDynamicBoxes[b].rect.area()+mvProbeStates[j].rect.area()-in.area();
             if(u>0.f && in.area()/u>0.15f) { stable=true; break; }
         }
         if(!stable) continue;
         for(size_t i=0;i<mCurrentFrame.mvKeysUn.size();++i) if(mCurrentFrame.mvDynamicBoxes[b].rect.contains(mCurrentFrame.mvKeysUn[i].pt)) {
-            // Assist pose only: retain the mapping gate and use the existing
-            // low-weight temporary-observation path.
-            if(i<mCurrentFrame.mvDynamicProbability.size()) mCurrentFrame.mvDynamicProbability[i]=0.45f;
-            if(i<mCurrentFrame.mvbDynamicForMapping.size()) mCurrentFrame.mvbDynamicForMapping[i]=1;
-            if(i<mCurrentFrame.mvbRecoveredBackground.size()) mCurrentFrame.mvbRecoveredBackground[i]=1;
+            // This box has passed the temporal 3-D test.  Let its ordinary
+            // features rejoin tracking and map growth so stationary cars can
+            // acquire normal green MapPoint correspondences.  This is not a
+            // semantic-class exception: the next strong-motion decision
+            // revokes it by restoring the hard mask in PrepareDynamicMask.
+            if(i<mCurrentFrame.mvDynamicProbability.size()) mCurrentFrame.mvDynamicProbability[i]=0.0f;
+            if(i<mCurrentFrame.mvbDynamicForMapping.size()) mCurrentFrame.mvbDynamicForMapping[i]=0;
+            if(i<mCurrentFrame.mvbRecoveredBackground.size()) mCurrentFrame.mvbRecoveredBackground[i]=0;
         }
     }
 }
@@ -2645,7 +2667,9 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
     std::vector<YoloBoundingBox> dynamicBoxes;
     PrepareDynamicMask(++mnDynamicInputFrameId,imRGB,dynamicMask,staticMask,dynamicBoxes);
     RecoverDepthBackgroundInDynamicMask(dynamicMask,recoveredBackgroundMask,imDepth,dynamicBoxes);
-    if(mDynamicFilter.UseHardMask() && !dynamicMask.empty())
+    // PrepareDynamicMask may have selectively released a verified Static
+    // instance.  Do not overwrite that mask here.
+    if(mDynamicFilter.UseHardMask() && !mbInstanceMotionEnabled && !dynamicMask.empty())
         cv::bitwise_not(dynamicMask,staticMask);
 
     if (mSensor == System::RGBD)
@@ -2664,6 +2688,7 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
     mCurrentFrame.mnDataset = mnNumDataset;
     mCurrentFrame.mvDynamicBoxes = dynamicBoxes;
     ApplyDynamicPrior(dynamicMask, imDepth, recoveredBackgroundMask);
+    ApplyStaticProbeAssist();
     ExtractInstanceProbeFeatures(dynamicMask);
 
 #ifdef REGISTER_TIMES
