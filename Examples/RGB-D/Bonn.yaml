@@ -80,7 +80,9 @@ DynamicRecovery:
 # whether an instance is actually static or dynamic.
 InstanceMotion:
   enabled: 1
-  minMatches: 6
+  # Small stationary cars often expose only a few depth-valid ORB probes.
+  # The median/P90 3-D gates below still reject incoherent motion.
+  minMatches: 3
   staticRatio: 0.70
   reprojectionResidual: 5.0
   depthResidual: 0.10

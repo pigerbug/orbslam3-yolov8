@@ -1951,8 +1951,12 @@ void Tracking::UpdateInstanceMotionStates()
         const float median=residuals[residuals.size()/2], p90=residuals[(residuals.size()*9)/10];
         const bool isStatic=median<0.04f && p90<0.08f;
         ProbeInstanceState &state=mvProbeStates[s];
+        const unsigned char previousState=state.state;
         if(isStatic) { ++state.staticStreak; state.dynamicStreak=0; if(state.staticStreak>=3) state.state=1; }
         else { ++state.dynamicStreak; state.staticStreak=0; if(state.dynamicStreak>=2 || state.state==1) state.state=2; }
+        if(state.state!=previousState)
+            cout << "Probe instance state " << (state.state==1 ? "Static" : "Dynamic") << ": "
+                 << residuals.size() << " matches, median " << median << " m, p90 " << p90 << " m" << endl;
     }
 }
 
