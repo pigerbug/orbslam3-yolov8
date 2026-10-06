@@ -68,7 +68,7 @@ DynamicFilter:
   probabilityDumpPath: "/home/nan/workspace/orbslam3-yolov8/logs"
 
 DynamicRecovery:
-  enabled: 0
+  enabled: 1
   minStaticMapMatches: 60
   backgroundDepthGap: 0.15
   # Recovered box-interior background may assist only the current pose at a
@@ -113,7 +113,7 @@ PoseGuard:
   minStaticInliers: 45
 
 GroundShadow:
-  enabled: 0
+  enabled: 1
   prior: 0.45
   planeDistance: 0.08
   radius: 0.35
