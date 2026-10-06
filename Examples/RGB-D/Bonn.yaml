@@ -90,6 +90,15 @@ OcclusionMode:
   holdOnSuddenLoss: 0
   maxHoldFrames: 10
 
+# Reject an apparently successful local-map pose when it makes a large
+# inter-frame jump without enough static-map support.  This protects ATE and
+# map growth from the brief crowd-induced wrong-association branches.
+PoseGuard:
+  enabled: 1
+  maxTranslation: 0.06
+  maxRotationDeg: 12.0
+  minStaticInliers: 45
+
 GroundShadow:
   enabled: 0
   prior: 0.45

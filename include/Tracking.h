@@ -234,6 +234,7 @@ protected:
     // are not covered by the detector's semantic classes.
     void ApplyUnknownMotionPrior();
     int CountCurrentStaticMapMatches() const;
+    bool HasLowSupportPoseJump() const;
     void RefinePoseWithLines();
     // RGB-D can normally bootstrap from a single frame with abundant ORB
     // points.  This structural alternative keeps that fast path untouched,
@@ -301,6 +302,10 @@ protected:
     float mRecoveryBackgroundDepthGap = 0.15f;
     float mRecoveryPoseProbability = 0.45f;
     float mRecoveryMapDepthResidual = 0.10f;
+    bool mbPoseGuardEnabled = false;
+    float mPoseGuardMaxTranslation = 0.06f;
+    float mPoseGuardMaxRotationDeg = 12.0f;
+    int mnPoseGuardMinStaticInliers = 45;
     bool mbOcclusionModeEnabled = false;
     // A failed match alone is ambiguous in pure RGB-D (motion blur, lighting
     // and fast rotation look identical to a full occlusion).  Keep this

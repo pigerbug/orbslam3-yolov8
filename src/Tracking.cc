@@ -121,6 +121,18 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         if(!occlusionNode["semanticCoverage"].empty()) mOcclusionSemanticCoverage = std::min(1.0f,std::max(0.0f,static_cast<float>(occlusionNode["semanticCoverage"])));
     }
 
+    cv::FileNode poseGuardNode = dynamicSettings["PoseGuard"];
+    if(!poseGuardNode.empty())
+    {
+        if(!poseGuardNode["enabled"].empty()) mbPoseGuardEnabled = static_cast<int>(poseGuardNode["enabled"]) != 0;
+        if(!poseGuardNode["maxTranslation"].empty())
+            mPoseGuardMaxTranslation = std::max(0.0f,static_cast<float>(poseGuardNode["maxTranslation"]));
+        if(!poseGuardNode["maxRotationDeg"].empty())
+            mPoseGuardMaxRotationDeg = std::max(0.0f,static_cast<float>(poseGuardNode["maxRotationDeg"]));
+        if(!poseGuardNode["minStaticInliers"].empty())
+            mnPoseGuardMinStaticInliers = std::max(0,static_cast<int>(poseGuardNode["minStaticInliers"]));
+    }
+
     cv::FileNode shadowNode = dynamicSettings["GroundShadow"];
     if(!shadowNode.empty())
     {
@@ -1983,6 +1995,36 @@ int Tracking::CountCurrentStaticMapMatches() const
     return matches;
 }
 
+bool Tracking::HasLowSupportPoseJump() const
+{
+    if(!mbPoseGuardEnabled || !mLastFrame.isSet() || !mCurrentFrame.isSet())
+        return false;
+
+    int staticInliers=0;
+    for(size_t i=0; i<mCurrentFrame.mvpMapPoints.size(); ++i)
+    {
+        MapPoint *pMP=mCurrentFrame.mvpMapPoints[i];
+        if(!pMP || pMP->isBad() || pMP->Observations()<=0) continue;
+        if(i<mCurrentFrame.mvbOutlier.size() && mCurrentFrame.mvbOutlier[i]) continue;
+        if(i<mCurrentFrame.mvbDynamicForMapping.size() && mCurrentFrame.mvbDynamicForMapping[i]) continue;
+        ++staticInliers;
+    }
+    if(staticInliers>=mnPoseGuardMinStaticInliers)
+        return false;
+
+    const Sophus::SE3f relativePose=mCurrentFrame.GetPose()*mLastFrame.GetPose().inverse();
+    const float translation=relativePose.translation().norm();
+    const Eigen::Matrix3f rotation=relativePose.rotationMatrix();
+    const float cosine=std::max(-1.0f,std::min(1.0f,(rotation.trace()-1.0f)*0.5f));
+    const float rotationDeg=std::acos(cosine)*180.0f/static_cast<float>(CV_PI);
+    const bool jump=translation>mPoseGuardMaxTranslation || rotationDeg>mPoseGuardMaxRotationDeg;
+    if(jump)
+        Verbose::PrintMess("Pose guard rejected low-support jump: " + to_string(staticInliers) +
+                           " static inliers, " + to_string(translation) + " m, " +
+                           to_string(rotationDeg) + " deg", Verbose::VERBOSITY_NORMAL);
+    return jump;
+}
+
 void Tracking::ApplyUnknownMotionPrior()
 {
     mbOcclusionFrame = false;
@@ -2974,7 +3016,13 @@ void Tracking::Track()
             if(bOK && !skipLocalMapForOcclusion)
             {
                 bOK = TrackLocalMap();
-
+                if(bOK && HasLowSupportPoseJump())
+                {
+                    // Do not let a rejected pose seed the motion model of
+                    // the next recovery frame.
+                    mCurrentFrame.SetPose(mLastFrame.GetPose());
+                    bOK=false;
+                }
             }
             if(!bOK)
                 cout << "Fail to track local map!" << endl;
@@ -2985,7 +3033,14 @@ void Tracking::Track()
             // a local map and therefore we do not perform TrackLocalMap(). Once the system relocalizes
             // the camera we will use the local map again.
             if(bOK && !mbVO && !skipLocalMapForOcclusion)
+            {
                 bOK = TrackLocalMap();
+                if(bOK && HasLowSupportPoseJump())
+                {
+                    mCurrentFrame.SetPose(mLastFrame.GetPose());
+                    bOK=false;
+                }
+            }
         }
 
         if(bOK)
