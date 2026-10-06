@@ -225,6 +225,9 @@ protected:
     void ValidateRecoveredBackgroundMatches();
     void PromoteRecoveredBackgroundMatches();
     void UpdateGeometricDynamicPrior();
+    // Semantic detections are only candidate motion regions.  RGB-D and map
+    // consistency may promote a currently stationary instance back to static.
+    void ApplyInstanceMotionVerification();
     void ApplyPersistentManhattanImmunity();
     void ApplyGroundShadowProbability();
     void DumpDynamicProbabilityStats();
@@ -302,6 +305,12 @@ protected:
     float mRecoveryBackgroundDepthGap = 0.15f;
     float mRecoveryPoseProbability = 0.45f;
     float mRecoveryMapDepthResidual = 0.10f;
+    bool mbInstanceMotionEnabled = false;
+    int mnInstanceMotionMinMatches = 6;
+    float mInstanceMotionStaticRatio = 0.70f;
+    float mInstanceMotionReprojectionResidual = 5.0f;
+    float mInstanceMotionDepthResidual = 0.10f;
+    float mInstanceMotionStaticProbability = 0.10f;
     bool mbPoseGuardEnabled = false;
     float mPoseGuardMaxTranslation = 0.06f;
     float mPoseGuardMaxRotationDeg = 12.0f;

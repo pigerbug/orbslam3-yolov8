@@ -34,10 +34,13 @@
 
 #include <iostream>
 
+#include <opencv2/features2d.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <chrono>
@@ -104,6 +107,22 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             mRecoveryPoseProbability = std::min(0.54f,std::max(0.0f,static_cast<float>(recoveryNode["poseProbability"])));
         if(!recoveryNode["mapDepthResidual"].empty())
             mRecoveryMapDepthResidual = std::max(0.01f,static_cast<float>(recoveryNode["mapDepthResidual"]));
+    }
+
+    cv::FileNode instanceMotionNode = dynamicSettings["InstanceMotion"];
+    if(!instanceMotionNode.empty())
+    {
+        if(!instanceMotionNode["enabled"].empty()) mbInstanceMotionEnabled = static_cast<int>(instanceMotionNode["enabled"]) != 0;
+        if(!instanceMotionNode["minMatches"].empty())
+            mnInstanceMotionMinMatches = std::max(2,static_cast<int>(instanceMotionNode["minMatches"]));
+        if(!instanceMotionNode["staticRatio"].empty())
+            mInstanceMotionStaticRatio = std::min(1.0f,std::max(0.0f,static_cast<float>(instanceMotionNode["staticRatio"])));
+        if(!instanceMotionNode["reprojectionResidual"].empty())
+            mInstanceMotionReprojectionResidual = std::max(1.0f,static_cast<float>(instanceMotionNode["reprojectionResidual"]));
+        if(!instanceMotionNode["depthResidual"].empty())
+            mInstanceMotionDepthResidual = std::max(0.01f,static_cast<float>(instanceMotionNode["depthResidual"]));
+        if(!instanceMotionNode["staticProbability"].empty())
+            mInstanceMotionStaticProbability = std::min(0.54f,std::max(0.0f,static_cast<float>(instanceMotionNode["staticProbability"])));
     }
 
     cv::FileNode occlusionNode = dynamicSettings["OcclusionMode"];
@@ -1583,7 +1602,7 @@ void Tracking::PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImag
     mDynamicFilter.SubmitImage(frameId, detectionImage);
     const bool hasDetections = mDynamicFilter.WaitForDetections(frameId, detectionImage.size(),
                                                                  mDynamicFilter.ResultWaitMs(), dynamicMask, boxes);
-    if(hasDetections && mDynamicFilter.UseHardMask())
+    if(hasDetections && mDynamicFilter.UseHardMask() && !mbInstanceMotionEnabled)
         cv::bitwise_not(dynamicMask,staticMask);
     if(!hasDetections)
         boxes.clear();
@@ -1593,7 +1612,7 @@ void Tracking::RecoverDepthBackgroundInDynamicMask(cv::Mat &dynamicMask, cv::Mat
                                                     const std::vector<YoloBoundingBox> &boxes)
 {
     recoveredBackgroundMask.release();
-    if(!mbDepthRecoveryEnabled || !mDynamicFilter.UseHardMask() || dynamicMask.empty() ||
+    if(!mbDepthRecoveryEnabled || !mDynamicFilter.UseHardMask() || mbInstanceMotionEnabled || dynamicMask.empty() ||
        depth.empty() || depth.type()!=CV_32F || boxes.empty())
         return;
 
@@ -1745,6 +1764,122 @@ void Tracking::UpdateGeometricDynamicPrior()
         mCurrentFrame.mvbDynamicForMapping[i] = mDynamicFilter.IsDynamicForMapping(
             mCurrentFrame.mvDynamicProbability[i], mCurrentFrame.mvbManhattanImmune[i]) ||
             (i<mCurrentFrame.mvbRecoveredBackground.size() && mCurrentFrame.mvbRecoveredBackground[i]);
+}
+
+void Tracking::ApplyInstanceMotionVerification()
+{
+    if(!mbInstanceMotionEnabled || !mCurrentFrame.HasPose() ||
+       mCurrentFrame.mvDynamicBoxes.empty() || mCurrentFrame.mvKeysUn.empty())
+        return;
+
+    const Sophus::SE3f Tcw=mCurrentFrame.GetPose();
+    for(size_t boxIndex=0; boxIndex<mCurrentFrame.mvDynamicBoxes.size(); ++boxIndex)
+    {
+        const YoloBoundingBox &box=mCurrentFrame.mvDynamicBoxes[boxIndex];
+        std::vector<int> currentIndices;
+        for(size_t i=0; i<mCurrentFrame.mvKeysUn.size(); ++i)
+            if(box.rect.contains(mCurrentFrame.mvKeysUn[i].pt))
+                currentIndices.push_back(static_cast<int>(i));
+        if(currentIndices.empty()) continue;
+
+        int support=0;
+        int staticConsistent=0;
+
+        // First use established static landmarks. This is the strongest test
+        // because both reprojection and RGB-D depth are checked against the
+        // map predicted from the current pose.
+        for(size_t k=0; k<currentIndices.size(); ++k)
+        {
+            const int i=currentIndices[k];
+            MapPoint *pMP=i<static_cast<int>(mCurrentFrame.mvpMapPoints.size()) ? mCurrentFrame.mvpMapPoints[i] : NULL;
+            if(!pMP || pMP->isBad() || pMP->Observations()<2) continue;
+            const Eigen::Vector3f pointCamera=Tcw*pMP->GetWorldPos();
+            if(pointCamera.z()<=0.0f || i>=static_cast<int>(mCurrentFrame.mvDepth.size()) ||
+               mCurrentFrame.mvDepth[i]<=0.0f || !mCurrentFrame.mpCamera)
+                continue;
+            ++support;
+            const Eigen::Vector2f projection=mCurrentFrame.mpCamera->project(pointCamera);
+            const float reprojection=cv::norm(cv::Point2f(projection.x(),projection.y())-
+                                               mCurrentFrame.mvKeysUn[i].pt);
+            const float depthTolerance=std::max(mInstanceMotionDepthResidual,0.05f*pointCamera.z());
+            if(reprojection<=mInstanceMotionReprojectionResidual &&
+               std::fabs(mCurrentFrame.mvDepth[i]-pointCamera.z())<=depthTolerance)
+                ++staticConsistent;
+        }
+
+        // A stationary object may not have MapPoints yet because it was
+        // previously masked. Bootstrap that decision with real descriptor
+        // correspondences and RGB-D world-point consistency across frames.
+        int previousBox=-1;
+        float nearestCenterDistance=std::numeric_limits<float>::max();
+        const cv::Point2f center(box.rect.x+0.5f*box.rect.width,box.rect.y+0.5f*box.rect.height);
+        for(size_t previousIndex=0; previousIndex<mLastFrame.mvDynamicBoxes.size(); ++previousIndex)
+        {
+            const YoloBoundingBox &previousBoxCandidate=mLastFrame.mvDynamicBoxes[previousIndex];
+            if(previousBoxCandidate.classId!=box.classId) continue;
+            const cv::Point2f previousCenter(previousBoxCandidate.rect.x+0.5f*previousBoxCandidate.rect.width,
+                                             previousBoxCandidate.rect.y+0.5f*previousBoxCandidate.rect.height);
+            const float distance=cv::norm(center-previousCenter);
+            if(distance<nearestCenterDistance)
+            {
+                nearestCenterDistance=distance;
+                previousBox=static_cast<int>(previousIndex);
+            }
+        }
+        if(previousBox>=0 && !mLastFrame.mDescriptors.empty() && !mCurrentFrame.mDescriptors.empty())
+        {
+            const cv::Rect2f &previousRect=mLastFrame.mvDynamicBoxes[previousBox].rect;
+            std::vector<int> previousIndices;
+            for(size_t i=0; i<mLastFrame.mvKeysUn.size(); ++i)
+                if(previousRect.contains(mLastFrame.mvKeysUn[i].pt) &&
+                   i<static_cast<size_t>(mLastFrame.mDescriptors.rows))
+                    previousIndices.push_back(static_cast<int>(i));
+            std::vector<int> descriptorCurrentIndices;
+            for(size_t k=0; k<currentIndices.size(); ++k)
+                if(currentIndices[k]<mCurrentFrame.mDescriptors.rows)
+                    descriptorCurrentIndices.push_back(currentIndices[k]);
+
+            if(!previousIndices.empty() && !descriptorCurrentIndices.empty())
+            {
+                cv::Mat previousDescriptors, currentDescriptors;
+                for(size_t k=0; k<previousIndices.size(); ++k)
+                    previousDescriptors.push_back(mLastFrame.mDescriptors.row(previousIndices[k]));
+                for(size_t k=0; k<descriptorCurrentIndices.size(); ++k)
+                    currentDescriptors.push_back(mCurrentFrame.mDescriptors.row(descriptorCurrentIndices[k]));
+                std::vector<cv::DMatch> matches;
+                cv::BFMatcher matcher(cv::NORM_HAMMING,true);
+                matcher.match(previousDescriptors,currentDescriptors,matches);
+                for(size_t k=0; k<matches.size(); ++k)
+                {
+                    if(matches[k].distance>48.0f) continue;
+                    Eigen::Vector3f previousWorld,currentWorld;
+                    const int previousFeature=previousIndices[matches[k].queryIdx];
+                    const int currentFeature=descriptorCurrentIndices[matches[k].trainIdx];
+                    if(!mLastFrame.UnprojectStereo(previousFeature,previousWorld) ||
+                       !mCurrentFrame.UnprojectStereo(currentFeature,currentWorld))
+                        continue;
+                    ++support;
+                    if((previousWorld-currentWorld).norm()<=mInstanceMotionDepthResidual)
+                        ++staticConsistent;
+                }
+            }
+        }
+
+        if(support<mnInstanceMotionMinMatches ||
+           static_cast<float>(staticConsistent)/static_cast<float>(support)<mInstanceMotionStaticRatio)
+            continue;
+
+        // This instance is static in the current frame. Release every feature
+        // in its box so it can support tracking and seed persistent MapPoints.
+        for(size_t k=0; k<currentIndices.size(); ++k)
+        {
+            const size_t i=static_cast<size_t>(currentIndices[k]);
+            if(i<mCurrentFrame.mvDynamicProbability.size())
+                mCurrentFrame.mvDynamicProbability[i]=std::min(mCurrentFrame.mvDynamicProbability[i],mInstanceMotionStaticProbability);
+            if(i<mCurrentFrame.mvbDynamicForMapping.size())
+                mCurrentFrame.mvbDynamicForMapping[i]=0;
+        }
+    }
 }
 
 void Tracking::ApplyPersistentManhattanImmunity()
@@ -2334,7 +2469,7 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
     std::vector<YoloBoundingBox> dynamicBoxes;
     PrepareDynamicMask(++mnDynamicInputFrameId,imRGB,dynamicMask,staticMask,dynamicBoxes);
     RecoverDepthBackgroundInDynamicMask(dynamicMask,recoveredBackgroundMask,imDepth,dynamicBoxes);
-    if(mDynamicFilter.UseHardMask() && !dynamicMask.empty())
+    if(mDynamicFilter.UseHardMask() && !mbInstanceMotionEnabled && !dynamicMask.empty())
         cv::bitwise_not(dynamicMask,staticMask);
 
     if (mSensor == System::RGBD)
@@ -3672,6 +3807,7 @@ bool Tracking::TrackReferenceKeyFrame()
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
     ApplyUnknownMotionPrior();
+    ApplyInstanceMotionVerification();
     DumpDynamicProbabilityStats();
     ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
@@ -3844,6 +3980,7 @@ bool Tracking::TrackWithMotionModel()
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
     ApplyUnknownMotionPrior();
+    ApplyInstanceMotionVerification();
     DumpDynamicProbabilityStats();
     ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
@@ -3897,6 +4034,7 @@ bool Tracking::TrackLocalMap()
 
     UpdateLocalMap();
     SearchLocalPoints();
+    ApplyInstanceMotionVerification();
     RejectDynamicMapPointObservations();
 
     // TOO check outliers before PO
@@ -3913,6 +4051,7 @@ bool Tracking::TrackLocalMap()
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
     ApplyUnknownMotionPrior();
+    ApplyInstanceMotionVerification();
     DumpDynamicProbabilityStats();
     ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
