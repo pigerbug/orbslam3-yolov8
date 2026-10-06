@@ -53,9 +53,8 @@ Viewer.ViewpointF: 500.0
 DynamicFilter:
   enabled: 1
   engine: "/home/nan/workspace/orbslam3-yolov8/models/yolov8n.engine"
-  # InstanceMotion keeps candidate-box features until RGB-D verification;
-  # motion is gated later by Pdynamic rather than pre-extraction masking.
-  hardMask: 0
+  # All YOLO candidate instances are masked from the main ORB front end.
+  hardMask: 1
   sampsonEnabled: 1
   dynamicThreshold: 0.55
   yoloPrior: 0.70
@@ -77,9 +76,8 @@ DynamicRecovery:
   poseProbability: 0.45
   mapDepthResidual: 0.10
 
-# YOLO classes are only candidate motion regions.  With this enabled, their
-# features are retained first; an instance is released as static only after
-# RGB-D/world consistency of real cross-frame matches supports that decision.
+# YOLO classes are only candidate regions; the probe state machine determines
+# whether an instance is actually static or dynamic.
 InstanceMotion:
   enabled: 1
   minMatches: 6

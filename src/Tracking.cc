@@ -1602,8 +1602,18 @@ void Tracking::PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImag
     mDynamicFilter.SubmitImage(frameId, detectionImage);
     const bool hasDetections = mDynamicFilter.WaitForDetections(frameId, detectionImage.size(),
                                                                  mDynamicFilter.ResultWaitMs(), dynamicMask, boxes);
-    if(hasDetections && mDynamicFilter.UseHardMask() && !mbInstanceMotionEnabled)
-        cv::bitwise_not(dynamicMask,staticMask);
+    if(hasDetections && mDynamicFilter.UseHardMask())
+    {
+        cv::Mat mask=dynamicMask.clone();
+        if(mbInstanceMotionEnabled)
+            for(size_t i=0;i<boxes.size();++i)
+                for(size_t j=0;j<mvProbeStates.size();++j) if(mvProbeStates[j].state==1) {
+                    cv::Rect2f in=boxes[i].rect & mvProbeStates[j].rect;
+                    float u=boxes[i].rect.area()+mvProbeStates[j].rect.area()-in.area();
+                    if(u>0.f && in.area()/u>0.15f) { cv::rectangle(mask,boxes[i].rect,cv::Scalar(0),cv::FILLED); break; }
+                }
+        cv::bitwise_not(mask,staticMask);
+    }
     if(!hasDetections)
         boxes.clear();
 }
@@ -1878,6 +1888,91 @@ void Tracking::ApplyInstanceMotionVerification()
                 mCurrentFrame.mvDynamicProbability[i]=std::min(mCurrentFrame.mvDynamicProbability[i],mInstanceMotionStaticProbability);
             if(i<mCurrentFrame.mvbDynamicForMapping.size())
                 mCurrentFrame.mvbDynamicForMapping[i]=0;
+        }
+    }
+}
+
+void Tracking::ExtractInstanceProbeFeatures(const cv::Mat &dynamicMask)
+{
+    mLastProbeKeys.swap(mvProbeKeys);
+    mLastProbeDescriptors=mProbeDescriptors;
+    mLastProbeStates.swap(mvProbeStates);
+    mvProbeKeys.clear();
+    mProbeDescriptors.release();
+    mvProbeStates.clear();
+    if(!mbInstanceMotionEnabled || dynamicMask.empty() || mCurrentFrame.mvDynamicBoxes.empty())
+        return;
+
+    // This extractor is intentionally independent from Frame::ExtractORB:
+    // probe features never change the main ORB budget or BoW/map pipeline.
+    vector<int> lapping={0,0};
+    (*mpORBextractorLeft)(mImGray,dynamicMask,mvProbeKeys,mProbeDescriptors,lapping);
+    mvProbeStates.resize(mCurrentFrame.mvDynamicBoxes.size());
+    for(size_t i=0;i<mvProbeStates.size();++i)
+        mvProbeStates[i].rect=mCurrentFrame.mvDynamicBoxes[i].rect;
+}
+
+void Tracking::UpdateInstanceMotionStates()
+{
+    if(!mbInstanceMotionEnabled || !mCurrentFrame.HasPose() || !mLastFrame.HasPose() || mvProbeKeys.empty() ||
+       mvLastProbeKeys.empty() || mProbeDescriptors.empty() || mLastProbeDescriptors.empty()) return;
+    vector<cv::DMatch> matches;
+    cv::BFMatcher matcher(cv::NORM_HAMMING,true);
+    matcher.match(mLastProbeDescriptors,mProbeDescriptors,matches);
+    const Sophus::SE3f Twc=mCurrentFrame.GetPose().inverse();
+    const Sophus::SE3f TwcLast=mLastFrame.GetPose().inverse();
+    for(size_t s=0;s<mvProbeStates.size();++s) {
+        int previous=-1; float best=0.f;
+        for(size_t p=0;p<mLastProbeStates.size();++p) {
+            const cv::Rect2f inter=mvProbeStates[s].rect & mLastProbeStates[p].rect;
+            const float uni=mvProbeStates[s].rect.area()+mLastProbeStates[p].rect.area()-inter.area();
+            const float iou=uni>0.f ? inter.area()/uni : 0.f;
+            if(iou>best) { best=iou; previous=static_cast<int>(p); }
+        }
+        if(previous<0 || best<0.15f) continue;
+        mvProbeStates[s].staticStreak=mLastProbeStates[previous].staticStreak;
+        mvProbeStates[s].dynamicStreak=mLastProbeStates[previous].dynamicStreak;
+        mvProbeStates[s].state=mLastProbeStates[previous].state;
+        vector<float> residuals;
+        for(size_t k=0;k<matches.size();++k) {
+            if(matches[k].distance>48.f) continue;
+            const cv::KeyPoint &a=mvLastProbeKeys[matches[k].queryIdx], &b=mvProbeKeys[matches[k].trainIdx];
+            if(!mLastProbeStates[previous].rect.contains(a.pt) || !mvProbeStates[s].rect.contains(b.pt)) continue;
+            const int ax=cvRound(a.pt.x), ay=cvRound(a.pt.y), bx=cvRound(b.pt.x), by=cvRound(b.pt.y);
+            if(ax<0||ay<0||bx<0||by<0||ax>=mLastFrame.mImDepth.cols||ay>=mLastFrame.mImDepth.rows||bx>=mCurrentFrame.mImDepth.cols||by>=mCurrentFrame.mImDepth.rows) continue;
+            const float za=mLastFrame.mImDepth.at<float>(ay,ax), zb=mCurrentFrame.mImDepth.at<float>(by,bx);
+            if(za<=0.f||zb<=0.f||!mCurrentFrame.mpCamera) continue;
+            const Eigen::Vector3f pa=TwcLast*(mLastFrame.mpCamera->unprojectEig(a.pt)*za);
+            const Eigen::Vector3f pb=Twc*(mCurrentFrame.mpCamera->unprojectEig(b.pt)*zb);
+            residuals.push_back((pa-pb).norm());
+        }
+        if(static_cast<int>(residuals.size())<mnInstanceMotionMinMatches) continue;
+        sort(residuals.begin(),residuals.end());
+        const float median=residuals[residuals.size()/2], p90=residuals[(residuals.size()*9)/10];
+        const bool isStatic=median<0.04f && p90<0.08f;
+        ProbeInstanceState &state=mvProbeStates[s];
+        if(isStatic) { ++state.staticStreak; state.dynamicStreak=0; if(state.staticStreak>=3) state.state=1; }
+        else { ++state.dynamicStreak; state.staticStreak=0; if(state.dynamicStreak>=2 || state.state==1) state.state=2; }
+    }
+}
+
+void Tracking::ApplyStaticProbeAssist()
+{
+    if(!mbInstanceMotionEnabled) return;
+    for(size_t b=0;b<mCurrentFrame.mvDynamicBoxes.size();++b) {
+        bool stable=false;
+        for(size_t j=0;j<mvProbeStates.size();++j) if(mvProbeStates[j].state==1) {
+            cv::Rect2f in=mCurrentFrame.mvDynamicBoxes[b].rect & mvProbeStates[j].rect;
+            float u=mCurrentFrame.mvDynamicBoxes[b].rect.area()+mvProbeStates[j].rect.area()-in.area();
+            if(u>0.f && in.area()/u>0.15f) { stable=true; break; }
+        }
+        if(!stable) continue;
+        for(size_t i=0;i<mCurrentFrame.mvKeysUn.size();++i) if(mCurrentFrame.mvDynamicBoxes[b].rect.contains(mCurrentFrame.mvKeysUn[i].pt)) {
+            // Assist pose only: retain the mapping gate and use the existing
+            // low-weight temporary-observation path.
+            if(i<mCurrentFrame.mvDynamicProbability.size()) mCurrentFrame.mvDynamicProbability[i]=0.45f;
+            if(i<mCurrentFrame.mvbDynamicForMapping.size()) mCurrentFrame.mvbDynamicForMapping[i]=1;
+            if(i<mCurrentFrame.mvbRecoveredBackground.size()) mCurrentFrame.mvbRecoveredBackground[i]=1;
         }
     }
 }
@@ -2488,6 +2583,8 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
     mCurrentFrame.mnDataset = mnNumDataset;
     mCurrentFrame.mvDynamicBoxes = dynamicBoxes;
     ApplyDynamicPrior(dynamicMask, imDepth, recoveredBackgroundMask);
+    ApplyStaticProbeAssist();
+    ExtractInstanceProbeFeatures(dynamicMask);
 
 #ifdef REGISTER_TIMES
     vdORBExtract_ms.push_back(mCurrentFrame.mTimeORB_Ext);
@@ -3813,6 +3910,7 @@ bool Tracking::TrackReferenceKeyFrame()
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
     RefinePoseWithLines();
+    UpdateInstanceMotionStates();
 
     // Discard outliers
     int nmatchesMap = 0;
@@ -3986,6 +4084,7 @@ bool Tracking::TrackWithMotionModel()
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
     RefinePoseWithLines();
+    UpdateInstanceMotionStates();
 
     // Discard outliers
     int nmatchesMap = 0;
@@ -4081,6 +4180,7 @@ bool Tracking::TrackLocalMap()
         }
     }
     RefinePoseWithLines();
+    UpdateInstanceMotionStates();
     // A recovered background feature first contributes with its reduced pose
     // weight.  Only after the final pose step may an existing static-map
     // association promote it back to a normal observation.

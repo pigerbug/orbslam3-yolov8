@@ -228,6 +228,9 @@ protected:
     // Semantic detections are only candidate motion regions.  RGB-D and map
     // consistency may promote a currently stationary instance back to static.
     void ApplyInstanceMotionVerification();
+    void ExtractInstanceProbeFeatures(const cv::Mat &dynamicMask);
+    void UpdateInstanceMotionStates();
+    void ApplyStaticProbeAssist();
     void ApplyPersistentManhattanImmunity();
     void ApplyGroundShadowProbability();
     void DumpDynamicProbabilityStats();
@@ -311,6 +314,15 @@ protected:
     float mInstanceMotionReprojectionResidual = 5.0f;
     float mInstanceMotionDepthResidual = 0.10f;
     float mInstanceMotionStaticProbability = 0.10f;
+    struct ProbeInstanceState {
+        cv::Rect2f rect;
+        int staticStreak = 0;
+        int dynamicStreak = 0;
+        unsigned char state = 0; // 0 unknown, 1 static, 2 dynamic
+    };
+    std::vector<cv::KeyPoint> mvProbeKeys, mvLastProbeKeys;
+    cv::Mat mProbeDescriptors, mLastProbeDescriptors;
+    std::vector<ProbeInstanceState> mvProbeStates, mvLastProbeStates;
     bool mbPoseGuardEnabled = false;
     float mPoseGuardMaxTranslation = 0.06f;
     float mPoseGuardMaxRotationDeg = 12.0f;
