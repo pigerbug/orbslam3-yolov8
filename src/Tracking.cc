@@ -1950,10 +1950,21 @@ void Tracking::UpdateInstanceMotionStates()
         sort(residuals.begin(),residuals.end());
         const float median=residuals[residuals.size()/2], p90=residuals[(residuals.size()*9)/10];
         const bool isStatic=median<0.04f && p90<0.08f;
+        // Cross-checked ORB probe matches still contain a small tail of
+        // descriptor outliers.  Once an instance has accumulated Static
+        // evidence, revoke it only for genuinely coherent motion, not for a
+        // marginal P90 excursion around the 8 cm static gate.
+        const bool strongDynamic=median>0.06f || p90>0.15f;
         ProbeInstanceState &state=mvProbeStates[s];
         const unsigned char previousState=state.state;
         if(isStatic) { ++state.staticStreak; state.dynamicStreak=0; if(state.staticStreak>=3) state.state=1; }
-        else { ++state.dynamicStreak; state.staticStreak=0; if(state.dynamicStreak>=2 || state.state==1) state.state=2; }
+        else {
+            state.staticStreak=0;
+            if(strongDynamic) ++state.dynamicStreak;
+            else state.dynamicStreak=0;
+            if((state.state==0 && state.dynamicStreak>=2) ||
+               (state.state==1 && strongDynamic)) state.state=2;
+        }
         if(state.state!=previousState)
             cout << "Probe instance state " << (state.state==1 ? "Static" : "Dynamic") << ": "
                  << residuals.size() << " matches, median " << median << " m, p90 " << p90 << " m" << endl;
