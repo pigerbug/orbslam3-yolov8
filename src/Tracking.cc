@@ -1604,15 +1604,9 @@ void Tracking::PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImag
                                                                  mDynamicFilter.ResultWaitMs(), dynamicMask, boxes);
     if(hasDetections && mDynamicFilter.UseHardMask())
     {
-        cv::Mat mask=dynamicMask.clone();
-        if(mbInstanceMotionEnabled)
-            for(size_t i=0;i<boxes.size();++i)
-                for(size_t j=0;j<mvProbeStates.size();++j) if(mvProbeStates[j].state==1) {
-                    cv::Rect2f in=boxes[i].rect & mvProbeStates[j].rect;
-                    float u=boxes[i].rect.area()+mvProbeStates[j].rect.area()-in.area();
-                    if(u>0.f && in.area()/u>0.15f) { cv::rectangle(mask,boxes[i].rect,cv::Scalar(0),cv::FILLED); break; }
-                }
-        cv::bitwise_not(mask,staticMask);
+        // Main ORB always excludes detected instances.  Probe constraints
+        // are pose-only and must never leak into mapping or keyframes.
+        cv::bitwise_not(dynamicMask,staticMask);
     }
     if(!hasDetections)
         boxes.clear();
@@ -1778,6 +1772,11 @@ void Tracking::UpdateGeometricDynamicPrior()
 
 void Tracking::ApplyInstanceMotionVerification()
 {
+    // Kept as a compatibility hook for older call sites.  Classification is
+    // now performed solely by the isolated probe pipeline below; re-enabling
+    // regular Frame features here would violate the hard-mask contract.
+    return;
+
     if(!mbInstanceMotionEnabled || !mCurrentFrame.HasPose() ||
        mCurrentFrame.mvDynamicBoxes.empty() || mCurrentFrame.mvKeysUn.empty())
         return;
@@ -1968,8 +1967,10 @@ void Tracking::UpdateInstanceMotionStates()
         if(state.state!=previousState)
             cout << "Probe instance state " << (state.state==1 ? "Static" : "Dynamic") << ": "
                  << residuals.size() << " matches, median " << median << " m, p90 " << p90 << " m" << endl;
-        if(state.state==1)
+        if(state.state==1) {
+            int landmarksForInstance=0;
             for(size_t k=0;k<mvProbeKeys.size() && k<static_cast<size_t>(mProbeDescriptors.rows);++k) {
+                if(landmarksForInstance>=20) break;
                 if(!state.rect.contains(mvProbeKeys[k].pt)) continue;
                 const int x=cvRound(mvProbeKeys[k].pt.x), y=cvRound(mvProbeKeys[k].pt.y);
                 if(x<0||y<0||x>=mCurrentFrame.mImDepth.cols||y>=mCurrentFrame.mImDepth.rows) continue;
@@ -1978,9 +1979,13 @@ void Tracking::UpdateInstanceMotionStates()
                 ProbeLandmark landmark;
                 landmark.world=mCurrentFrame.GetPose().inverse()*(mCurrentFrame.mpCamera->unprojectEig(mvProbeKeys[k].pt)*z);
                 landmark.descriptor=mProbeDescriptors.row(static_cast<int>(k)).clone();
+                landmark.rect=state.rect;
+                landmark.instanceId=static_cast<int>(s);
                 landmark.ttl=2;
                 mvProbeLandmarks.push_back(landmark);
+                ++landmarksForInstance;
             }
+        }
     }
 }
 
@@ -2009,18 +2014,47 @@ void Tracking::BuildTemporaryProbeConstraints()
 {
     mCurrentFrame.mvProbeWorldPoints.clear();
     mCurrentFrame.mvProbeObservations.clear();
-    if(!mCurrentFrame.HasPose() || mvProbeLandmarks.empty() || mProbeDescriptors.empty()) return;
+    mCurrentFrame.mvProbeInstanceIds.clear();
+    if(!mCurrentFrame.HasPose() || CountCurrentStaticMapMatches()>=20 || mvProbeLandmarks.empty() || mProbeDescriptors.empty()) return;
     for(size_t i=0;i<mvProbeLandmarks.size();++i) --mvProbeLandmarks[i].ttl;
     mvProbeLandmarks.erase(remove_if(mvProbeLandmarks.begin(),mvProbeLandmarks.end(),
         [](const ProbeLandmark &p){ return p.ttl<=0; }),mvProbeLandmarks.end());
-    cv::BFMatcher matcher(cv::NORM_HAMMING,true);
+    // Ratio matching requires two nearest candidates, so cross-check cannot
+    // be enabled here.  Geometry and RGB-D gates below are stricter.
+    cv::BFMatcher matcher(cv::NORM_HAMMING,false);
     cv::Mat descriptors;
     for(size_t i=0;i<mvProbeLandmarks.size();++i) descriptors.push_back(mvProbeLandmarks[i].descriptor);
-    vector<cv::DMatch> matches;
-    if(!descriptors.empty()) matcher.match(descriptors,mProbeDescriptors,matches);
-    for(size_t i=0;i<matches.size();++i) if(matches[i].distance<=40.f) {
-        mCurrentFrame.mvProbeWorldPoints.push_back(mvProbeLandmarks[matches[i].queryIdx].world);
-        mCurrentFrame.mvProbeObservations.push_back(mvProbeKeys[matches[i].trainIdx]);
+    vector<vector<cv::DMatch> > knn;
+    if(!descriptors.empty()) matcher.knnMatch(descriptors,mProbeDescriptors,knn,2);
+    const Sophus::SE3f Tcw=mCurrentFrame.GetPose();
+    for(size_t i=0;i<knn.size() && mCurrentFrame.mvProbeWorldPoints.size()<10;++i) {
+        if(knn[i].size()<2 || knn[i][0].distance>40.f || knn[i][0].distance>=0.75f*knn[i][1].distance) continue;
+        const cv::KeyPoint &kp=mvProbeKeys[knn[i][0].trainIdx];
+        const ProbeLandmark &landmark=mvProbeLandmarks[knn[i][0].queryIdx];
+        // A descriptor may not migrate between instances.  Require the
+        // current detection to overlap the previously Static instance and
+        // contain this probe feature.
+        bool sameStaticInstance=false;
+        for(size_t b=0;b<mCurrentFrame.mvDynamicBoxes.size();++b) {
+            const cv::Rect2f inter=landmark.rect & mCurrentFrame.mvDynamicBoxes[b].rect;
+            const float uni=landmark.rect.area()+mCurrentFrame.mvDynamicBoxes[b].rect.area()-inter.area();
+            if(uni>0.f && inter.area()/uni>0.15f && mCurrentFrame.mvDynamicBoxes[b].rect.contains(kp.pt)) {
+                sameStaticInstance=true;
+                break;
+            }
+        }
+        if(!sameStaticInstance) continue;
+        const Eigen::Vector3f pc=Tcw*landmark.world;
+        if(pc.z()<=0.f || !mCurrentFrame.mpCamera) continue;
+        const Eigen::Vector2f uv=mCurrentFrame.mpCamera->project(pc);
+        if(cv::norm(cv::Point2f(uv.x(),uv.y())-kp.pt)>3.f) continue;
+        const int x=cvRound(kp.pt.x),y=cvRound(kp.pt.y);
+        if(x<0||y<0||x>=mCurrentFrame.mImDepth.cols||y>=mCurrentFrame.mImDepth.rows) continue;
+        const float z=mCurrentFrame.mImDepth.at<float>(y,x);
+        if(z<=0.f || std::fabs(z-pc.z())>0.03f) continue;
+        mCurrentFrame.mvProbeWorldPoints.push_back(landmark.world);
+        mCurrentFrame.mvProbeObservations.push_back(kp);
+        mCurrentFrame.mvProbeInstanceIds.push_back(landmark.instanceId);
     }
 }
 
@@ -2611,7 +2645,7 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
     std::vector<YoloBoundingBox> dynamicBoxes;
     PrepareDynamicMask(++mnDynamicInputFrameId,imRGB,dynamicMask,staticMask,dynamicBoxes);
     RecoverDepthBackgroundInDynamicMask(dynamicMask,recoveredBackgroundMask,imDepth,dynamicBoxes);
-    if(mDynamicFilter.UseHardMask() && !mbInstanceMotionEnabled && !dynamicMask.empty())
+    if(mDynamicFilter.UseHardMask() && !dynamicMask.empty())
         cv::bitwise_not(dynamicMask,staticMask);
 
     if (mSensor == System::RGBD)
@@ -2630,7 +2664,6 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
     mCurrentFrame.mnDataset = mnNumDataset;
     mCurrentFrame.mvDynamicBoxes = dynamicBoxes;
     ApplyDynamicPrior(dynamicMask, imDepth, recoveredBackgroundMask);
-    ApplyStaticProbeAssist();
     ExtractInstanceProbeFeatures(dynamicMask);
 
 #ifdef REGISTER_TIMES
@@ -3951,7 +3984,6 @@ bool Tracking::TrackReferenceKeyFrame()
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
     ApplyUnknownMotionPrior();
-    ApplyInstanceMotionVerification();
     DumpDynamicProbabilityStats();
     ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
@@ -4126,7 +4158,6 @@ bool Tracking::TrackWithMotionModel()
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
     ApplyUnknownMotionPrior();
-    ApplyInstanceMotionVerification();
     DumpDynamicProbabilityStats();
     ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
@@ -4182,7 +4213,6 @@ bool Tracking::TrackLocalMap()
 
     UpdateLocalMap();
     SearchLocalPoints();
-    ApplyInstanceMotionVerification();
     RejectDynamicMapPointObservations();
 
     // TOO check outliers before PO
@@ -4199,7 +4229,6 @@ bool Tracking::TrackLocalMap()
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
     ApplyUnknownMotionPrior();
-    ApplyInstanceMotionVerification();
     DumpDynamicProbabilityStats();
     ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();

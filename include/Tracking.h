@@ -324,6 +324,8 @@ protected:
     struct ProbeLandmark {
         Eigen::Vector3f world;
         cv::Mat descriptor;
+        cv::Rect2f rect;
+        int instanceId = -1;
         int ttl = 0;
     };
     std::vector<cv::KeyPoint> mvProbeKeys, mvLastProbeKeys;

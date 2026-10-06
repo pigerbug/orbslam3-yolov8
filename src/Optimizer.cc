@@ -23,6 +23,7 @@
 #include <complex>
 #include <cmath>
 #include <algorithm>
+#include <set>
 
 #include <Eigen/StdVector>
 #include <Eigen/Dense>
@@ -1016,6 +1017,12 @@ int Optimizer::PoseOptimization(Frame *pFrame)
     vpEdgesStereo.reserve(N);
     vnIndexEdgeStereo.reserve(N);
 
+    // Temporary RGB-D probe constraints are grouped by detected instance.
+    // If one member of a group is inconsistent after optimization, the full
+    // group is removed before the next iteration.
+    vector<ORB_SLAM3::EdgeSE3ProjectXYZOnlyPose*> vpEdgesProbe;
+    vector<int> vnProbeInstance;
+
     const float deltaMono = sqrt(5.991);
     const float deltaStereo = sqrt(7.815);
 
@@ -1178,17 +1185,24 @@ int Optimizer::PoseOptimization(Frame *pFrame)
         Eigen::Matrix<double,2,1> obs;
         obs << pFrame->mvProbeObservations[i].pt.x,pFrame->mvProbeObservations[i].pt.y;
         e->setMeasurement(obs);
-        e->setInformation(Eigen::Matrix2d::Identity()*0.5);
+        e->setInformation(Eigen::Matrix2d::Identity()*0.1);
         g2o::RobustKernelHuber *rk=new g2o::RobustKernelHuber;
         e->setRobustKernel(rk); rk->setDelta(deltaMono);
         e->pCamera=pFrame->mpCamera;
         e->Xw=pFrame->mvProbeWorldPoints[i].cast<double>();
         optimizer.addEdge(e);
+        vpEdgesProbe.push_back(e);
+        vnProbeInstance.push_back(i<pFrame->mvProbeInstanceIds.size() ? pFrame->mvProbeInstanceIds[i] : -1);
     }
     }
 
     if(nInitialCorrespondences<3)
+    {
+        pFrame->mvProbeWorldPoints.clear();
+        pFrame->mvProbeObservations.clear();
+        pFrame->mvProbeInstanceIds.clear();
         return 0;
+    }
 
     // We perform 4 optimizations, after each optimization we classify observation as inlier/outlier
     // At the next optimization, outliers are not included, but at the end they can be classified as inliers again.
@@ -1293,6 +1307,23 @@ int Optimizer::PoseOptimization(Frame *pFrame)
                 e->setRobustKernel(0);
         }
 
+        // Probe edges have already passed ratio, 3 px reprojection and 3 cm
+        // RGB-D tests.  A remaining optimizer outlier means this instance is
+        // not trustworthy for this frame.  Disable its complete group rather
+        // than retaining a potentially self-consistent moving subset.
+        set<int> rejectedProbeInstances;
+        for(size_t i=0; i<vpEdgesProbe.size(); ++i)
+        {
+            ORB_SLAM3::EdgeSE3ProjectXYZOnlyPose *e=vpEdgesProbe[i];
+            if(e->level()!=0) continue;
+            e->computeError();
+            if(e->chi2()>chi2Mono[it])
+                rejectedProbeInstances.insert(vnProbeInstance[i]);
+        }
+        for(size_t i=0; i<vpEdgesProbe.size(); ++i)
+            if(rejectedProbeInstances.count(vnProbeInstance[i]))
+                vpEdgesProbe[i]->setLevel(1);
+
         if(optimizer.edges().size()<10)
             break;
     }    
@@ -1303,6 +1334,13 @@ int Optimizer::PoseOptimization(Frame *pFrame)
     Sophus::SE3<float> pose(SE3quat_recov.rotation().cast<float>(),
             SE3quat_recov.translation().cast<float>());
     pFrame->SetPose(pose);
+
+    // Probe constraints have a one-call lifetime.  Keeping them in Frame
+    // would make a later tracking stage accidentally reuse stale 2D-3D
+    // evidence, and Frame copies would carry them into the next image.
+    pFrame->mvProbeWorldPoints.clear();
+    pFrame->mvProbeObservations.clear();
+    pFrame->mvProbeInstanceIds.clear();
 
     return nInitialCorrespondences-nBad;
 }

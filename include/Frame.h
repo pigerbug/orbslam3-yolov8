@@ -245,6 +245,9 @@ public:
     // MapPoints: Tracking may use them for this frame's pose only.
     std::vector<Eigen::Vector3f> mvProbeWorldPoints;
     std::vector<cv::KeyPoint> mvProbeObservations;
+    // Used only to reject an ephemeral probe instance as a whole during
+    // pose optimization.  Probe observations never become map observations.
+    std::vector<int> mvProbeInstanceIds;
     std::vector<YoloBoundingBox> mvDynamicBoxes;
 
     // Corresponding stereo coordinate and depth for each keypoint.

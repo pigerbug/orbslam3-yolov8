@@ -67,7 +67,10 @@ DynamicFilter:
   probabilityDumpPath: "/home/nan/workspace/orbslam3-yolov8/logs"
 
 DynamicRecovery:
-  enabled: 1
+  # This broad background-recovery path is intentionally off while the
+  # instance probe is enabled: recovery is restricted to the temporary,
+  # low-weight constraints defined in code below.
+  enabled: 0
   minStaticMapMatches: 60
   backgroundDepthGap: 0.15
   # Recovered box-interior background may assist only the current pose at a
