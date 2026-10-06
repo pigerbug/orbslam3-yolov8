@@ -1,0 +1,101 @@
+%YAML:1.0
+
+# Bonn RGB-D Dynamic Dataset configuration.
+# Official RGB calibration:
+# https://www.ipb.uni-bonn.de/data/rgbd-dynamic-dataset/index.html
+File.version: "1.0"
+
+Camera.type: "PinHole"
+Camera1.fx: 542.822841
+Camera1.fy: 542.576870
+Camera1.cx: 315.593520
+Camera1.cy: 237.756098
+
+# Bonn publishes OpenCV distortion coefficients d0..d4.  They map to
+# k1, k2, p1, p2, k3 respectively.
+Camera1.k1: 0.039903
+Camera1.k2: -0.099343
+Camera1.p1: -0.000730
+Camera1.p2: -0.000144
+Camera1.k3: 0.000000
+
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30
+Camera.RGB: 1
+
+# RGB-D depth is already registered to color.  The 16-bit depth PNGs follow
+# the TUM-compatible convention (metric_depth = stored_value / 5000).
+# Stereo.b/bf only defines the close/far observation threshold in RGB-D mode.
+Stereo.ThDepth: 40.0
+Stereo.b: 0.0747
+RGBD.DepthMapFactor: 5000.0
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500.0
+
+# Dynamic feature front end.  Update engine to the TensorRT engine generated
+# for the GPU used for the experiment.
+DynamicFilter:
+  enabled: 1
+  engine: "/home/nan/workspace/orbslam3-yolov8/models/yolov8n.engine"
+  hardMask: 1
+  sampsonEnabled: 1
+  dynamicThreshold: 0.55
+  yoloPrior: 0.70
+  planeDistance: 0.05
+  dumpProbabilities: 0
+  probabilityDumpPath: "/home/nan/workspace/orbslam3-yolov8/logs"
+
+DynamicRecovery:
+  enabled: 0
+  minStaticMapMatches: 60
+  backgroundDepthGap: 0.15
+
+GroundShadow:
+  enabled: 0
+  prior: 0.45
+  planeDistance: 0.08
+  radius: 0.35
+  brightnessDiff: 12.0
+  textureStd: 18.0
+  geometryThreshold: 0.10
+
+ManhattanPlane:
+  enabled: 1
+
+PlaneBA:
+  enabled: 1
+
+LineFeature:
+  enabled: 1
+
+LineInitialization:
+  enabled: 1
+  minStaticPoints: 120
+  minDepthLines: 12
+  minLineLength: 30.0
+
+LineBA:
+  enabled: 1
+  minStaticPointEdges: 150
+
+# Keep disabled for the primary dynamic comparison.  Enable only for the
+# low-texture structural ablation after a MapLine map has been established.
+LineTracking:
+  enabled: 0
+  maxStaticPoints: 80
