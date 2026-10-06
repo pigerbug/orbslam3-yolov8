@@ -219,6 +219,10 @@ protected:
                                              const std::vector<YoloBoundingBox> &boxes);
     void ApplyDynamicPrior(const cv::Mat &dynamicMask, const cv::Mat &depth = cv::Mat(),
                            const cv::Mat &recoveredBackgroundMask = cv::Mat());
+    // A pixel that is merely farther than the semantic foreground is not yet
+    // reliable. It must agree with an established MapPoint before it can
+    // participate in pose optimisation.
+    void ValidateRecoveredBackgroundMatches();
     void PromoteRecoveredBackgroundMatches();
     void UpdateGeometricDynamicPrior();
     void ApplyPersistentManhattanImmunity();
@@ -296,6 +300,7 @@ protected:
     int mnRecoveryMinStaticMapMatches = 60;
     float mRecoveryBackgroundDepthGap = 0.15f;
     float mRecoveryPoseProbability = 0.45f;
+    float mRecoveryMapDepthResidual = 0.10f;
     bool mbOcclusionModeEnabled = false;
     // A failed match alone is ambiguous in pure RGB-D (motion blur, lighting
     // and fast rotation look identical to a full occlusion).  Keep this

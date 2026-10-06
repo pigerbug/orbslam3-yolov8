@@ -66,8 +66,10 @@ DynamicRecovery:
   minStaticMapMatches: 60
   backgroundDepthGap: 0.15
   # Recovered box-interior background may assist only the current pose at a
-  # reduced weight; it is barred from new landmark/keyframe observations.
+  # reduced weight after static-map/depth validation; it is barred from new
+  # landmark/keyframe observations.
   poseProbability: 0.45
+  mapDepthResidual: 0.10
 
 # Pure RGB-D fallback for full or near-full occlusion.  Unknown coherent
 # motion is identified from disagreement with the pose predicted from the

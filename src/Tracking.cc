@@ -102,6 +102,8 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             mRecoveryBackgroundDepthGap = std::max(0.0f,static_cast<float>(recoveryNode["backgroundDepthGap"]));
         if(!recoveryNode["poseProbability"].empty())
             mRecoveryPoseProbability = std::min(0.54f,std::max(0.0f,static_cast<float>(recoveryNode["poseProbability"])));
+        if(!recoveryNode["mapDepthResidual"].empty())
+            mRecoveryMapDepthResidual = std::max(0.01f,static_cast<float>(recoveryNode["mapDepthResidual"]));
     }
 
     cv::FileNode occlusionNode = dynamicSettings["OcclusionMode"];
@@ -1668,6 +1670,38 @@ void Tracking::PromoteRecoveredBackgroundMatches()
             mCurrentFrame.mvDynamicProbability[i]=std::min(mCurrentFrame.mvDynamicProbability[i],0.15f);
         if(i<mCurrentFrame.mvbDynamicForMapping.size())
             mCurrentFrame.mvbDynamicForMapping[i]=0;
+    }
+}
+
+void Tracking::ValidateRecoveredBackgroundMatches()
+{
+    if(mCurrentFrame.mvbRecoveredBackground.empty() || !mCurrentFrame.HasPose())
+        return;
+
+    const Sophus::SE3f Tcw=mCurrentFrame.GetPose();
+    for(size_t i=0; i<mCurrentFrame.mvbRecoveredBackground.size(); ++i)
+    {
+        if(!mCurrentFrame.mvbRecoveredBackground[i]) continue;
+
+        MapPoint *pMP=i<mCurrentFrame.mvpMapPoints.size() ? mCurrentFrame.mvpMapPoints[i] : NULL;
+        const float measuredDepth=i<mCurrentFrame.mvDepth.size() ? mCurrentFrame.mvDepth[i] : -1.0f;
+        bool consistent=pMP && !pMP->isBad() && pMP->Observations()>=2 && measuredDepth>0.0f;
+        if(consistent)
+        {
+            const float predictedDepth=(Tcw*pMP->GetWorldPos()).z();
+            // Preserve a small relative tolerance for RGB-D noise, but the
+            // associated map point must be at the same physical depth.
+            const float tolerance=std::max(mRecoveryMapDepthResidual,0.05f*predictedDepth);
+            consistent=predictedDepth>0.0f && std::fabs(measuredDepth-predictedDepth)<=tolerance;
+        }
+
+        if(!consistent)
+        {
+            if(i<mCurrentFrame.mvpMapPoints.size())
+                mCurrentFrame.mvpMapPoints[i]=NULL;
+            if(i<mCurrentFrame.mvbOutlier.size())
+                mCurrentFrame.mvbOutlier[i]=true;
+        }
     }
 }
 
@@ -3581,6 +3615,7 @@ bool Tracking::TrackReferenceKeyFrame()
     ApplyGroundShadowProbability();
     ApplyUnknownMotionPrior();
     DumpDynamicProbabilityStats();
+    ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
     RefinePoseWithLines();
@@ -3752,6 +3787,7 @@ bool Tracking::TrackWithMotionModel()
     ApplyGroundShadowProbability();
     ApplyUnknownMotionPrior();
     DumpDynamicProbabilityStats();
+    ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
     RefinePoseWithLines();
@@ -3820,6 +3856,7 @@ bool Tracking::TrackLocalMap()
     ApplyGroundShadowProbability();
     ApplyUnknownMotionPrior();
     DumpDynamicProbabilityStats();
+    ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
     int inliers;
     if (!mpAtlas->isImuInitialized())
