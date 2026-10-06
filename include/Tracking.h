@@ -43,6 +43,7 @@
 
 #include <mutex>
 #include <unordered_set>
+#include <limits>
 
 namespace ORB_SLAM3
 {
@@ -315,10 +316,15 @@ protected:
     float mInstanceMotionReprojectionResidual = 5.0f;
     float mInstanceMotionDepthResidual = 0.10f;
     float mInstanceMotionStaticProbability = 0.10f;
+    int mnInstanceMotionReleaseFrames = 6;
+    int mnInstanceMotionReleaseMinMatches = 12;
     struct ProbeInstanceState {
         cv::Rect2f rect;
         int staticStreak = 0;
         int dynamicStreak = 0;
+        int evidenceMatches = 0;
+        float medianResidual = std::numeric_limits<float>::infinity();
+        float p90Residual = std::numeric_limits<float>::infinity();
         unsigned char state = 0; // 0 unknown, 1 static, 2 dynamic
     };
     struct ProbeLandmark {

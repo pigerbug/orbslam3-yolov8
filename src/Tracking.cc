@@ -123,6 +123,10 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             mInstanceMotionDepthResidual = std::max(0.01f,static_cast<float>(instanceMotionNode["depthResidual"]));
         if(!instanceMotionNode["staticProbability"].empty())
             mInstanceMotionStaticProbability = std::min(0.54f,std::max(0.0f,static_cast<float>(instanceMotionNode["staticProbability"])));
+        if(!instanceMotionNode["releaseFrames"].empty())
+            mnInstanceMotionReleaseFrames = std::max(3,static_cast<int>(instanceMotionNode["releaseFrames"]));
+        if(!instanceMotionNode["releaseMinMatches"].empty())
+            mnInstanceMotionReleaseMinMatches = std::max(4,static_cast<int>(instanceMotionNode["releaseMinMatches"]));
     }
 
     cv::FileNode occlusionNode = dynamicSettings["OcclusionMode"];
@@ -1613,14 +1617,21 @@ void Tracking::PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImag
         if(mbInstanceMotionEnabled)
             for(size_t i=0;i<boxes.size();++i)
                 for(size_t j=0;j<mvProbeStates.size();++j)
-                    if(mvProbeStates[j].state==1 && mvProbeStates[j].staticStreak>=3)
+                    if(mvProbeStates[j].state==1 &&
+                       mvProbeStates[j].staticStreak>=mnInstanceMotionReleaseFrames &&
+                       mvProbeStates[j].evidenceMatches>=mnInstanceMotionReleaseMinMatches &&
+                       mvProbeStates[j].medianResidual<=0.025f &&
+                       mvProbeStates[j].p90Residual<=0.060f)
                     {
                         const cv::Rect2f inter=boxes[i].rect & mvProbeStates[j].rect;
                         const float uni=boxes[i].rect.area()+mvProbeStates[j].rect.area()-inter.area();
                         if(uni>0.f && inter.area()/uni>0.15f)
                         {
                             cv::rectangle(mask,boxes[i].rect,cv::Scalar(0),cv::FILLED);
-                            cout << "Probe static instance released to main tracking" << endl;
+                            cout << "Probe static instance released to main tracking: "
+                                 << mvProbeStates[j].evidenceMatches << " matches, median "
+                                 << mvProbeStates[j].medianResidual << " m, p90 "
+                                 << mvProbeStates[j].p90Residual << " m" << endl;
                             break;
                         }
                     }
@@ -1963,16 +1974,33 @@ void Tracking::UpdateInstanceMotionStates()
             const Eigen::Vector3f pb=Twc*(mCurrentFrame.mpCamera->unprojectEig(b.pt)*zb);
             residuals.push_back((pa-pb).norm());
         }
-        if(static_cast<int>(residuals.size())<mnInstanceMotionMinMatches) continue;
+        ProbeInstanceState &state=mvProbeStates[s];
+        if(static_cast<int>(residuals.size())<mnInstanceMotionMinMatches)
+        {
+            // No current geometric support means Unknown, not "keep the
+            // previous Static label".  Otherwise an occluded/mismatched car
+            // can remain released indefinitely on stale evidence.
+            state.staticStreak=0;
+            state.dynamicStreak=0;
+            state.evidenceMatches=0;
+            state.medianResidual=std::numeric_limits<float>::infinity();
+            state.p90Residual=std::numeric_limits<float>::infinity();
+            state.state=0;
+            continue;
+        }
         sort(residuals.begin(),residuals.end());
         const float median=residuals[residuals.size()/2], p90=residuals[(residuals.size()*9)/10];
-        const bool isStatic=median<0.04f && p90<0.08f;
+        // A candidate may become Probe-Static at this stage, but release to
+        // the normal map has an additional support/streak gate below.
+        const bool isStatic=median<0.030f && p90<0.060f;
         // Cross-checked ORB probe matches still contain a small tail of
         // descriptor outliers.  Once an instance has accumulated Static
         // evidence, revoke it only for genuinely coherent motion, not for a
         // marginal P90 excursion around the 8 cm static gate.
-        const bool strongDynamic=median>0.06f || p90>0.15f;
-        ProbeInstanceState &state=mvProbeStates[s];
+        const bool strongDynamic=median>0.055f || p90>0.120f;
+        state.evidenceMatches=static_cast<int>(residuals.size());
+        state.medianResidual=median;
+        state.p90Residual=p90;
         const unsigned char previousState=state.state;
         if(isStatic) { ++state.staticStreak; state.dynamicStreak=0; if(state.staticStreak>=3) state.state=1; }
         else {
@@ -2013,7 +2041,11 @@ void Tracking::ApplyStaticProbeAssist()
     for(size_t b=0;b<mCurrentFrame.mvDynamicBoxes.size();++b) {
         bool stable=false;
         for(size_t j=0;j<mvProbeStates.size();++j)
-            if(mvProbeStates[j].state==1 && mvProbeStates[j].staticStreak>=3) {
+            if(mvProbeStates[j].state==1 &&
+               mvProbeStates[j].staticStreak>=mnInstanceMotionReleaseFrames &&
+               mvProbeStates[j].evidenceMatches>=mnInstanceMotionReleaseMinMatches &&
+               mvProbeStates[j].medianResidual<=0.025f &&
+               mvProbeStates[j].p90Residual<=0.060f) {
             cv::Rect2f in=mCurrentFrame.mvDynamicBoxes[b].rect & mvProbeStates[j].rect;
             float u=mCurrentFrame.mvDynamicBoxes[b].rect.area()+mvProbeStates[j].rect.area()-in.area();
             if(u>0.f && in.area()/u>0.15f) { stable=true; break; }
