@@ -241,6 +241,10 @@ public:
     // may support the current pose, but cannot create persistent map state
     // until they match an existing static MapPoint in a later frame.
     std::vector<unsigned char> mvbRecoveredBackground;
+    // Ephemeral RGB-D probe observations. They are deliberately not
+    // MapPoints: Tracking may use them for this frame's pose only.
+    std::vector<Eigen::Vector3f> mvProbeWorldPoints;
+    std::vector<cv::KeyPoint> mvProbeObservations;
     std::vector<YoloBoundingBox> mvDynamicBoxes;
 
     // Corresponding stereo coordinate and depth for each keypoint.

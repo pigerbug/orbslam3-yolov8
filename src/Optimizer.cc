@@ -1167,6 +1167,24 @@ int Optimizer::PoseOptimization(Frame *pFrame)
             }
         }
     }
+
+    // Ephemeral probe landmarks are pose-only RGB-D constraints.  They do
+    // not belong to the map and therefore never create observations or BA
+    // edges outside this optimizer invocation.
+    for(size_t i=0;i<pFrame->mvProbeWorldPoints.size() && i<pFrame->mvProbeObservations.size();++i)
+    {
+        ORB_SLAM3::EdgeSE3ProjectXYZOnlyPose *e=new ORB_SLAM3::EdgeSE3ProjectXYZOnlyPose();
+        e->setVertex(0,dynamic_cast<g2o::OptimizableGraph::Vertex*>(optimizer.vertex(0)));
+        Eigen::Matrix<double,2,1> obs;
+        obs << pFrame->mvProbeObservations[i].pt.x,pFrame->mvProbeObservations[i].pt.y;
+        e->setMeasurement(obs);
+        e->setInformation(Eigen::Matrix2d::Identity()*0.5);
+        g2o::RobustKernelHuber *rk=new g2o::RobustKernelHuber;
+        e->setRobustKernel(rk); rk->setDelta(deltaMono);
+        e->pCamera=pFrame->mpCamera;
+        e->Xw=pFrame->mvProbeWorldPoints[i].cast<double>();
+        optimizer.addEdge(e);
+    }
     }
 
     if(nInitialCorrespondences<3)

@@ -231,6 +231,7 @@ protected:
     void ExtractInstanceProbeFeatures(const cv::Mat &dynamicMask);
     void UpdateInstanceMotionStates();
     void ApplyStaticProbeAssist();
+    void BuildTemporaryProbeConstraints();
     void ApplyPersistentManhattanImmunity();
     void ApplyGroundShadowProbability();
     void DumpDynamicProbabilityStats();
@@ -320,9 +321,15 @@ protected:
         int dynamicStreak = 0;
         unsigned char state = 0; // 0 unknown, 1 static, 2 dynamic
     };
+    struct ProbeLandmark {
+        Eigen::Vector3f world;
+        cv::Mat descriptor;
+        int ttl = 0;
+    };
     std::vector<cv::KeyPoint> mvProbeKeys, mvLastProbeKeys;
     cv::Mat mProbeDescriptors, mLastProbeDescriptors;
     std::vector<ProbeInstanceState> mvProbeStates, mvLastProbeStates;
+    std::vector<ProbeLandmark> mvProbeLandmarks;
     bool mbPoseGuardEnabled = false;
     float mPoseGuardMaxTranslation = 0.06f;
     float mPoseGuardMaxRotationDeg = 12.0f;

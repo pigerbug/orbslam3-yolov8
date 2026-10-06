@@ -1968,6 +1968,19 @@ void Tracking::UpdateInstanceMotionStates()
         if(state.state!=previousState)
             cout << "Probe instance state " << (state.state==1 ? "Static" : "Dynamic") << ": "
                  << residuals.size() << " matches, median " << median << " m, p90 " << p90 << " m" << endl;
+        if(state.state==1)
+            for(size_t k=0;k<mvProbeKeys.size() && k<static_cast<size_t>(mProbeDescriptors.rows);++k) {
+                if(!state.rect.contains(mvProbeKeys[k].pt)) continue;
+                const int x=cvRound(mvProbeKeys[k].pt.x), y=cvRound(mvProbeKeys[k].pt.y);
+                if(x<0||y<0||x>=mCurrentFrame.mImDepth.cols||y>=mCurrentFrame.mImDepth.rows) continue;
+                const float z=mCurrentFrame.mImDepth.at<float>(y,x);
+                if(z<=0.f||!mCurrentFrame.mpCamera) continue;
+                ProbeLandmark landmark;
+                landmark.world=mCurrentFrame.GetPose().inverse()*(mCurrentFrame.mpCamera->unprojectEig(mvProbeKeys[k].pt)*z);
+                landmark.descriptor=mProbeDescriptors.row(static_cast<int>(k)).clone();
+                landmark.ttl=2;
+                mvProbeLandmarks.push_back(landmark);
+            }
     }
 }
 
@@ -1989,6 +2002,25 @@ void Tracking::ApplyStaticProbeAssist()
             if(i<mCurrentFrame.mvbDynamicForMapping.size()) mCurrentFrame.mvbDynamicForMapping[i]=1;
             if(i<mCurrentFrame.mvbRecoveredBackground.size()) mCurrentFrame.mvbRecoveredBackground[i]=1;
         }
+    }
+}
+
+void Tracking::BuildTemporaryProbeConstraints()
+{
+    mCurrentFrame.mvProbeWorldPoints.clear();
+    mCurrentFrame.mvProbeObservations.clear();
+    if(!mCurrentFrame.HasPose() || mvProbeLandmarks.empty() || mProbeDescriptors.empty()) return;
+    for(size_t i=0;i<mvProbeLandmarks.size();++i) --mvProbeLandmarks[i].ttl;
+    mvProbeLandmarks.erase(remove_if(mvProbeLandmarks.begin(),mvProbeLandmarks.end(),
+        [](const ProbeLandmark &p){ return p.ttl<=0; }),mvProbeLandmarks.end());
+    cv::BFMatcher matcher(cv::NORM_HAMMING,true);
+    cv::Mat descriptors;
+    for(size_t i=0;i<mvProbeLandmarks.size();++i) descriptors.push_back(mvProbeLandmarks[i].descriptor);
+    vector<cv::DMatch> matches;
+    if(!descriptors.empty()) matcher.match(descriptors,mProbeDescriptors,matches);
+    for(size_t i=0;i<matches.size();++i) if(matches[i].distance<=40.f) {
+        mCurrentFrame.mvProbeWorldPoints.push_back(mvProbeLandmarks[matches[i].queryIdx].world);
+        mCurrentFrame.mvProbeObservations.push_back(mvProbeKeys[matches[i].trainIdx]);
     }
 }
 
@@ -3923,6 +3955,7 @@ bool Tracking::TrackReferenceKeyFrame()
     DumpDynamicProbabilityStats();
     ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
+    BuildTemporaryProbeConstraints();
     Optimizer::PoseOptimization(&mCurrentFrame);
     RefinePoseWithLines();
     UpdateInstanceMotionStates();
@@ -4097,6 +4130,7 @@ bool Tracking::TrackWithMotionModel()
     DumpDynamicProbabilityStats();
     ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
+    BuildTemporaryProbeConstraints();
     Optimizer::PoseOptimization(&mCurrentFrame);
     RefinePoseWithLines();
     UpdateInstanceMotionStates();
@@ -4169,6 +4203,7 @@ bool Tracking::TrackLocalMap()
     DumpDynamicProbabilityStats();
     ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
+    BuildTemporaryProbeConstraints();
     int inliers;
     if (!mpAtlas->isImuInitialized())
         Optimizer::PoseOptimization(&mCurrentFrame);
