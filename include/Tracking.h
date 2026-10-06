@@ -223,6 +223,11 @@ protected:
     void ApplyGroundShadowProbability();
     void DumpDynamicProbabilityStats();
     void RejectDynamicMapPointObservations();
+    // Detect coherent motion inconsistent with the pose predicted from the
+    // static map.  This catches unknown dynamic objects (e.g. boxes) that
+    // are not covered by the detector's semantic classes.
+    void ApplyUnknownMotionPrior();
+    int CountCurrentStaticMapMatches() const;
     void RefinePoseWithLines();
     // RGB-D can normally bootstrap from a single frame with abundant ORB
     // points.  This structural alternative keeps that fast path untouched,
@@ -288,6 +293,21 @@ protected:
     bool mbDepthRecoveryEnabled = false;
     int mnRecoveryMinStaticMapMatches = 60;
     float mRecoveryBackgroundDepthGap = 0.15f;
+    bool mbOcclusionModeEnabled = false;
+    bool mbOcclusionMode = false;
+    bool mbOcclusionFrame = false;
+    int mnOcclusionFrames = 0;
+    int mnOcclusionRecoveryFrames = 0;
+    int mnOcclusionMinStaticMatches = 20;
+    int mnOcclusionMinUnknownMatches = 20;
+    int mnOcclusionRecoveryRequiredFrames = 3;
+    int mnOcclusionMaxHoldFrames = 60;
+    float mOcclusionUnknownFraction = 0.60f;
+    float mOcclusionDepthResidual = 0.12f;
+    float mOcclusionReprojectionResidual = 12.0f;
+    float mOcclusionSemanticCoverage = 0.70f;
+    Sophus::SE3f mOcclusionPredictedPose;
+    bool mbOcclusionPredictedPoseValid = false;
     bool mbLineFeatureEnabled = true;
     bool mbLineInitializationEnabled = false;
     int mnLineInitializationMinStaticPoints = 120;

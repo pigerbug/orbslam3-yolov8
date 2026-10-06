@@ -89,6 +89,19 @@ DynamicRecovery:
   minStaticMapMatches: 60
   backgroundDepthGap: 0.15
 
+# Unknown-object / full-occlusion protection.  It freezes map growth and
+# uses only a bounded constant-velocity hold when static support disappears.
+OcclusionMode:
+  enabled: 1
+  minStaticMatches: 20
+  minUnknownMatches: 20
+  unknownFraction: 0.60
+  depthResidual: 0.12
+  reprojectionResidual: 12.0
+  semanticCoverage: 0.70
+  recoveryFrames: 3
+  maxHoldFrames: 60
+
 # Conservative ground-contact shadow probability; set enabled: 0 to restore
 # the pre-shadow baseline.
 GroundShadow:

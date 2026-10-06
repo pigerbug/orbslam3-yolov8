@@ -102,6 +102,20 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             mRecoveryBackgroundDepthGap = std::max(0.0f,static_cast<float>(recoveryNode["backgroundDepthGap"]));
     }
 
+    cv::FileNode occlusionNode = dynamicSettings["OcclusionMode"];
+    if(!occlusionNode.empty())
+    {
+        if(!occlusionNode["enabled"].empty()) mbOcclusionModeEnabled = static_cast<int>(occlusionNode["enabled"]) != 0;
+        if(!occlusionNode["minStaticMatches"].empty()) mnOcclusionMinStaticMatches = std::max(5,static_cast<int>(occlusionNode["minStaticMatches"]));
+        if(!occlusionNode["minUnknownMatches"].empty()) mnOcclusionMinUnknownMatches = std::max(5,static_cast<int>(occlusionNode["minUnknownMatches"]));
+        if(!occlusionNode["recoveryFrames"].empty()) mnOcclusionRecoveryRequiredFrames = std::max(1,static_cast<int>(occlusionNode["recoveryFrames"]));
+        if(!occlusionNode["maxHoldFrames"].empty()) mnOcclusionMaxHoldFrames = std::max(1,static_cast<int>(occlusionNode["maxHoldFrames"]));
+        if(!occlusionNode["unknownFraction"].empty()) mOcclusionUnknownFraction = std::min(1.0f,std::max(0.0f,static_cast<float>(occlusionNode["unknownFraction"])));
+        if(!occlusionNode["depthResidual"].empty()) mOcclusionDepthResidual = std::max(0.01f,static_cast<float>(occlusionNode["depthResidual"]));
+        if(!occlusionNode["reprojectionResidual"].empty()) mOcclusionReprojectionResidual = std::max(1.0f,static_cast<float>(occlusionNode["reprojectionResidual"]));
+        if(!occlusionNode["semanticCoverage"].empty()) mOcclusionSemanticCoverage = std::min(1.0f,std::max(0.0f,static_cast<float>(occlusionNode["semanticCoverage"])));
+    }
+
     cv::FileNode shadowNode = dynamicSettings["GroundShadow"];
     if(!shadowNode.empty())
     {
@@ -1878,6 +1892,95 @@ void Tracking::RejectDynamicMapPointObservations()
         }
 }
 
+int Tracking::CountCurrentStaticMapMatches() const
+{
+    int matches = 0;
+    for(size_t i = 0; i < mCurrentFrame.mvpMapPoints.size(); ++i)
+    {
+        if(!mCurrentFrame.mvpMapPoints[i]) continue;
+        if(i < mCurrentFrame.mvbOutlier.size() && mCurrentFrame.mvbOutlier[i]) continue;
+        if(i < mCurrentFrame.mvbDynamicForMapping.size() && mCurrentFrame.mvbDynamicForMapping[i]) continue;
+        if(mCurrentFrame.mvpMapPoints[i]->Observations() > 0) ++matches;
+    }
+    return matches;
+}
+
+void Tracking::ApplyUnknownMotionPrior()
+{
+    mbOcclusionFrame = false;
+    if(!mbOcclusionModeEnabled || !mCurrentFrame.isSet() || !mCurrentFrame.mpCamera)
+        return;
+
+    const Sophus::SE3f predictedPose = mCurrentFrame.GetPose();
+    mbOcclusionPredictedPoseValid = true;
+    mOcclusionPredictedPose = predictedPose;
+
+    if(mCurrentFrame.mvDynamicProbability.size() != mCurrentFrame.mvpMapPoints.size())
+        mCurrentFrame.mvDynamicProbability.assign(mCurrentFrame.mvpMapPoints.size(), 0.0f);
+    if(mCurrentFrame.mvbDynamicForMapping.size() != mCurrentFrame.mvpMapPoints.size())
+        mCurrentFrame.mvbDynamicForMapping.assign(mCurrentFrame.mvpMapPoints.size(), 0);
+
+    vector<size_t> unknownIndices;
+    int matchedStaticMapPoints = 0;
+    for(size_t i = 0; i < mCurrentFrame.mvpMapPoints.size(); ++i)
+    {
+        MapPoint *pMP = mCurrentFrame.mvpMapPoints[i];
+        if(!pMP || pMP->isBad() || pMP->Observations() <= 0 ||
+           (i < mCurrentFrame.mvbDynamicForMapping.size() && mCurrentFrame.mvbDynamicForMapping[i]))
+            continue;
+        ++matchedStaticMapPoints;
+        if(i >= mCurrentFrame.mvKeysUn.size()) continue;
+
+        const Eigen::Vector3f predictedCameraPoint = predictedPose * pMP->GetWorldPos();
+        if(predictedCameraPoint.z() <= 0.0f) continue;
+        const Eigen::Vector2f projected = mCurrentFrame.mpCamera->project(predictedCameraPoint);
+        const cv::Point2f observed = mCurrentFrame.mvKeysUn[i].pt;
+        const float reprojectionError = cv::norm(cv::Point2f(projected.x(),projected.y()) - observed);
+        const float observedDepth = i < mCurrentFrame.mvDepth.size() ? mCurrentFrame.mvDepth[i] : -1.0f;
+        const bool nearerThanStaticPrediction = observedDepth > 0.0f &&
+            observedDepth < predictedCameraPoint.z() - mOcclusionDepthResidual;
+
+        // Strong image disagreement is accepted without a depth residual to
+        // cover laterally moving objects; otherwise require the physically
+        // meaningful foreground-occlusion depth test.
+        if(reprojectionError > mOcclusionReprojectionResidual &&
+           (nearerThanStaticPrediction || reprojectionError > 2.0f*mOcclusionReprojectionResidual))
+            unknownIndices.push_back(i);
+    }
+
+    float semanticCoverage = 0.0f;
+    const int imageWidth = std::max(1, mImGray.cols);
+    const int imageHeight = std::max(1, mImGray.rows);
+    const float imageArea = static_cast<float>(imageWidth * imageHeight);
+    for(size_t i = 0; i < mCurrentFrame.mvDynamicBoxes.size(); ++i)
+    {
+        const cv::Rect2f clipped = mCurrentFrame.mvDynamicBoxes[i].rect &
+            cv::Rect2f(0.0f,0.0f,static_cast<float>(imageWidth),static_cast<float>(imageHeight));
+        semanticCoverage += std::max(0.0f,clipped.width) * std::max(0.0f,clipped.height) / imageArea;
+    }
+    semanticCoverage = std::min(1.0f,semanticCoverage);
+    const float unknownFraction = matchedStaticMapPoints > 0 ?
+        static_cast<float>(unknownIndices.size()) / matchedStaticMapPoints : 0.0f;
+    const bool coherentUnknownMotion = static_cast<int>(unknownIndices.size()) >= mnOcclusionMinUnknownMatches &&
+                                       unknownFraction >= mOcclusionUnknownFraction;
+    const bool semanticOcclusion = semanticCoverage >= mOcclusionSemanticCoverage;
+    if(!coherentUnknownMotion && !semanticOcclusion)
+        return;
+
+    for(size_t k = 0; k < unknownIndices.size(); ++k)
+    {
+        const size_t i = unknownIndices[k];
+        mCurrentFrame.mvDynamicProbability[i] = std::max(mCurrentFrame.mvDynamicProbability[i], 0.95f);
+        mCurrentFrame.mvbDynamicForMapping[i] = 1;
+    }
+    const int survivingStatic = matchedStaticMapPoints - static_cast<int>(unknownIndices.size());
+    mbOcclusionFrame = semanticOcclusion || survivingStatic < mnOcclusionMinStaticMatches;
+    if(mbOcclusionFrame)
+        Verbose::PrintMess("Occlusion mode candidate: " + to_string(unknownIndices.size()) +
+                           " unknown-motion matches, " + to_string(survivingStatic) +
+                           " static matches", Verbose::VERBOSITY_NORMAL);
+}
+
 void Tracking::RefinePoseWithLines()
 {
     if(!mbLineFeatureEnabled || !mbLineTrackingEnabled || !mpReferenceKF || mImGray.empty()) return;
@@ -2366,6 +2469,11 @@ void Tracking::ResetFrameIMU()
 void Tracking::Track()
 {
 
+    // Per-frame evidence is produced by ApplyUnknownMotionPrior.  The mode
+    // itself persists across a short occlusion, but stale evidence must not.
+    mbOcclusionFrame = false;
+    mbOcclusionPredictedPoseValid = false;
+
     if (bStepByStep)
     {
         std::cout << "Tracking: Waiting to the next step" << std::endl;
@@ -2678,6 +2786,84 @@ void Tracking::Track()
             }
         }
 
+        // A fully opaque unknown object can leave no map-point matches at
+        // all, so residual-based unknown-motion evidence is unavailable.
+        // If a previously well-supported map suddenly loses all support,
+        // enter the same bounded hold rather than immediately resetting it.
+        if(mbOcclusionModeEnabled && !mbOcclusionMode && !mbOcclusionFrame && !bOK && mLastFrame.isSet())
+        {
+            int previousStaticMatches = 0;
+            for(size_t i = 0; i < mLastFrame.mvpMapPoints.size(); ++i)
+            {
+                MapPoint *pMP = mLastFrame.mvpMapPoints[i];
+                if(!pMP || pMP->isBad() || pMP->Observations() <= 0) continue;
+                if(i < mLastFrame.mvbOutlier.size() && mLastFrame.mvbOutlier[i]) continue;
+                if(i < mLastFrame.mvbDynamicForMapping.size() && mLastFrame.mvbDynamicForMapping[i]) continue;
+                ++previousStaticMatches;
+            }
+            if(previousStaticMatches >= 2*mnOcclusionMinStaticMatches && mCurrentFrame.N >= mnOcclusionMinStaticMatches)
+            {
+                mbOcclusionFrame = true;
+                if(mCurrentFrame.isSet())
+                {
+                    mOcclusionPredictedPose = mCurrentFrame.GetPose();
+                    mbOcclusionPredictedPoseValid = true;
+                }
+                Verbose::PrintMess("Occlusion mode candidate: sudden loss of " +
+                                   to_string(previousStaticMatches) + " static matches", Verbose::VERBOSITY_NORMAL);
+            }
+        }
+
+        bool skipLocalMapForOcclusion = false;
+        if(mbOcclusionModeEnabled && (mbOcclusionFrame || mbOcclusionMode))
+        {
+            const int staticMatches = CountCurrentStaticMapMatches();
+            const bool insufficientStaticSupport = staticMatches < mnOcclusionMinStaticMatches;
+            if(mbOcclusionFrame || insufficientStaticSupport || !bOK)
+            {
+                mbOcclusionMode = true;
+                mnOcclusionRecoveryFrames = 0;
+                ++mnOcclusionFrames;
+                if(mnOcclusionFrames <= mnOcclusionMaxHoldFrames)
+                {
+                    if(mbOcclusionPredictedPoseValid)
+                        mCurrentFrame.SetPose(mOcclusionPredictedPose);
+                    bOK = true;
+                    skipLocalMapForOcclusion = true;
+                    Verbose::PrintMess("Occlusion hold frame " + to_string(mnOcclusionFrames) +
+                                       "/" + to_string(mnOcclusionMaxHoldFrames), Verbose::VERBOSITY_NORMAL);
+                }
+                else
+                {
+                    // Pure RGB-D has no independent motion measurement once
+                    // every static landmark is hidden.  After a bounded hold,
+                    // fall back to normal lost/relocalization handling.
+                    mbOcclusionMode = false;
+                    mnOcclusionFrames = 0;
+                    bOK = false;
+                }
+            }
+            else
+            {
+                ++mnOcclusionRecoveryFrames;
+                if(mnOcclusionRecoveryFrames < mnOcclusionRecoveryRequiredFrames)
+                {
+                    if(mbOcclusionPredictedPoseValid)
+                        mCurrentFrame.SetPose(mOcclusionPredictedPose);
+                    bOK = true;
+                    skipLocalMapForOcclusion = true;
+                }
+                else
+                {
+                    mbOcclusionMode = false;
+                    mnOcclusionFrames = 0;
+                    mnOcclusionRecoveryFrames = 0;
+                    Verbose::PrintMess("Occlusion mode recovered with " + to_string(staticMatches) +
+                                       " static matches", Verbose::VERBOSITY_NORMAL);
+                }
+            }
+        }
+
         if(!mCurrentFrame.mpReferenceKF)
             mCurrentFrame.mpReferenceKF = mpReferenceKF;
 
@@ -2695,7 +2881,7 @@ void Tracking::Track()
         // If we have an initial estimation of the camera pose and matching. Track the local map.
         if(!mbOnlyTracking)
         {
-            if(bOK)
+            if(bOK && !skipLocalMapForOcclusion)
             {
                 bOK = TrackLocalMap();
 
@@ -2708,7 +2894,7 @@ void Tracking::Track()
             // mbVO true means that there are few matches to MapPoints in the map. We cannot retrieve
             // a local map and therefore we do not perform TrackLocalMap(). Once the system relocalizes
             // the camera we will use the local map again.
-            if(bOK && !mbVO)
+            if(bOK && !mbVO && !skipLocalMapForOcclusion)
                 bOK = TrackLocalMap();
         }
 
@@ -2814,7 +3000,7 @@ void Tracking::Track()
 #ifdef REGISTER_TIMES
             std::chrono::steady_clock::time_point time_StartNewKF = std::chrono::steady_clock::now();
 #endif
-            bool bNeedKF = NeedNewKeyFrame();
+            bool bNeedKF = !mbOcclusionMode && NeedNewKeyFrame();
 
             // Check if we need to insert a new keyframe
             // if(bNeedKF && bOK)
@@ -3337,6 +3523,7 @@ bool Tracking::TrackReferenceKeyFrame()
     UpdateGeometricDynamicPrior();
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
+    ApplyUnknownMotionPrior();
     DumpDynamicProbabilityStats();
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
@@ -3507,6 +3694,7 @@ bool Tracking::TrackWithMotionModel()
     UpdateGeometricDynamicPrior();
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
+    ApplyUnknownMotionPrior();
     DumpDynamicProbabilityStats();
     RejectDynamicMapPointObservations();
     Optimizer::PoseOptimization(&mCurrentFrame);
@@ -3574,6 +3762,7 @@ bool Tracking::TrackLocalMap()
     UpdateGeometricDynamicPrior();
     ApplyPersistentManhattanImmunity();
     ApplyGroundShadowProbability();
+    ApplyUnknownMotionPrior();
     DumpDynamicProbabilityStats();
     RejectDynamicMapPointObservations();
     int inliers;

@@ -66,6 +66,20 @@ DynamicRecovery:
   minStaticMapMatches: 60
   backgroundDepthGap: 0.15
 
+# Pure RGB-D fallback for full or near-full occlusion.  Unknown coherent
+# motion is identified from disagreement with the pose predicted from the
+# existing static map; map growth is frozen until static support returns.
+OcclusionMode:
+  enabled: 1
+  minStaticMatches: 20
+  minUnknownMatches: 20
+  unknownFraction: 0.60
+  depthResidual: 0.12
+  reprojectionResidual: 12.0
+  semanticCoverage: 0.70
+  recoveryFrames: 3
+  maxHoldFrames: 60
+
 GroundShadow:
   enabled: 0
   prior: 0.45
