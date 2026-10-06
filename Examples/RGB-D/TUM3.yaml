@@ -109,6 +109,16 @@ ManhattanPlane:
 LineFeature:
   enabled: 1
 
+# Enables a structural RGB-D bootstrap when a frame has fewer than the
+# original 500 ORB points but still contains enough static depth points and
+# depth-supported LSD/LBD line segments.  This is intended for the TUM
+# structure_notexture sequences and is inactive once the map is initialized.
+LineInitialization:
+  enabled: 1
+  minStaticPoints: 120
+  minDepthLines: 12
+  minLineLength: 30.0
+
 LineBA:
   enabled: 1
   minStaticPointEdges: 150
@@ -120,4 +130,7 @@ PlaneBA:
 LineTracking:
   enabled: 0
   maxStaticPoints: 80
+  # For the structure_notexture experiment only, set enabled: 1 and use
+  # maxStaticPoints: 180. This lets MapLine constraints assist when the
+  # point-map becomes sparse after structural bootstrap.
 

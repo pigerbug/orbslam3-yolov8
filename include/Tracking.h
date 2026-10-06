@@ -22,6 +22,7 @@
 
 #include <opencv2/core/core.hpp>
 #include <opencv2/features2d/features2d.hpp>
+#include <opencv2/line_descriptor.hpp>
 
 #include "Viewer.h"
 #include "FrameDrawer.h"
@@ -223,6 +224,12 @@ protected:
     void DumpDynamicProbabilityStats();
     void RejectDynamicMapPointObservations();
     void RefinePoseWithLines();
+    // RGB-D can normally bootstrap from a single frame with abundant ORB
+    // points.  This structural alternative keeps that fast path untouched,
+    // but permits a low-texture frame to initialise when its remaining
+    // depth-supported points are backed by sufficiently many LSD/LBD lines.
+    bool CanInitializeWithStructuralLines(std::vector<cv::line_descriptor::KeyLine> *lines = NULL,
+                                          cv::Mat *descriptors = NULL) const;
 
     bool Relocalization();
 
@@ -282,6 +289,10 @@ protected:
     int mnRecoveryMinStaticMapMatches = 60;
     float mRecoveryBackgroundDepthGap = 0.15f;
     bool mbLineFeatureEnabled = true;
+    bool mbLineInitializationEnabled = false;
+    int mnLineInitializationMinStaticPoints = 120;
+    int mnLineInitializationMinDepthLines = 12;
+    float mLineInitializationMinLength = 30.0f;
     bool mbManhattanPlaneEnabled = true;
     // Evaluated in Tracking because it requires the current pose and the
     // world-frame plane landmarks owned by LocalMapping.

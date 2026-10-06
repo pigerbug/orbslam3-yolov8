@@ -23,6 +23,7 @@
 #include "FrameDrawer.h"
 #include "Converter.h"
 #include "G2oTypes.h"
+#include "LineExtractor.h"
 #include "LineMatcher.h"
 #include "MapLine.h"
 #include "Optimizer.h"
@@ -120,6 +121,19 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     cv::FileNode lineFeatureNode = dynamicSettings["LineFeature"];
     if(!lineFeatureNode.empty() && !lineFeatureNode["enabled"].empty())
         mbLineFeatureEnabled = static_cast<int>(lineFeatureNode["enabled"]) != 0;
+
+    cv::FileNode lineInitializationNode = dynamicSettings["LineInitialization"];
+    if(!lineInitializationNode.empty())
+    {
+        if(!lineInitializationNode["enabled"].empty())
+            mbLineInitializationEnabled = static_cast<int>(lineInitializationNode["enabled"]) != 0;
+        if(!lineInitializationNode["minStaticPoints"].empty())
+            mnLineInitializationMinStaticPoints = std::max(20, static_cast<int>(lineInitializationNode["minStaticPoints"]));
+        if(!lineInitializationNode["minDepthLines"].empty())
+            mnLineInitializationMinDepthLines = std::max(3, static_cast<int>(lineInitializationNode["minDepthLines"]));
+        if(!lineInitializationNode["minLineLength"].empty())
+            mLineInitializationMinLength = std::max(5.0f, static_cast<float>(lineInitializationNode["minLineLength"]));
+    }
 
     cv::FileNode lineTrackingNode = dynamicSettings["LineTracking"];
     if(!lineTrackingNode.empty())
@@ -1905,6 +1919,85 @@ void Tracking::RefinePoseWithLines()
     Optimizer::PoseOptimizationWithLines(&mCurrentFrame,currentLines,matchedLines);
 }
 
+bool Tracking::CanInitializeWithStructuralLines(vector<cv::line_descriptor::KeyLine> *lines,
+                                                cv::Mat *descriptors) const
+{
+    if(!mbLineFeatureEnabled || !mbLineInitializationEnabled || mImGray.empty() ||
+       mCurrentFrame.mImDepth.empty())
+        return false;
+
+    // Do not make the normal RGB-D bootstrap more expensive.  The original
+    // point-only condition remains the preferred path; this function is only
+    // called after it is known that fewer than 500 ORB features were found.
+    int staticDepthPoints = 0;
+    for(int i = 0; i < mCurrentFrame.N; ++i)
+    {
+        if(i >= static_cast<int>(mCurrentFrame.mvDepth.size()) || mCurrentFrame.mvDepth[i] <= 0.0f)
+            continue;
+        if(i < static_cast<int>(mCurrentFrame.mvbDynamicForMapping.size()) &&
+           mCurrentFrame.mvbDynamicForMapping[i])
+            continue;
+        ++staticDepthPoints;
+    }
+    if(staticDepthPoints < mnLineInitializationMinStaticPoints)
+        return false;
+
+    vector<cv::line_descriptor::KeyLine> extractedLines;
+    cv::Mat extractedDescriptors;
+    LineExtractor::Extract(mImGray, extractedLines, extractedDescriptors, 100);
+    if(extractedLines.empty())
+        return false;
+
+    const cv::Mat &depth = mCurrentFrame.mImDepth;
+    int validDepthLines = 0;
+    int orientationBins[4] = {0, 0, 0, 0};
+    for(size_t i = 0; i < extractedLines.size(); ++i)
+    {
+        const cv::line_descriptor::KeyLine &line = extractedLines[i];
+        if(line.lineLength < mLineInitializationMinLength)
+            continue;
+
+        const int samples[3][2] = {
+            {cvRound(line.startPointX), cvRound(line.startPointY)},
+            {cvRound(0.5f * (line.startPointX + line.endPointX)), cvRound(0.5f * (line.startPointY + line.endPointY))},
+            {cvRound(line.endPointX), cvRound(line.endPointY)}
+        };
+        int validSamples = 0;
+        for(int s = 0; s < 3; ++s)
+        {
+            const int x = samples[s][0], y = samples[s][1];
+            if(x < 0 || y < 0 || x >= depth.cols || y >= depth.rows)
+                continue;
+            const float z = depth.at<float>(y, x);
+            if(std::isfinite(z) && z > 0.0f)
+                ++validSamples;
+        }
+        // A valid midpoint plus one endpoint prevents a depth discontinuity
+        // or an invalid edge pixel from qualifying the whole line.
+        if(validSamples < 2)
+            continue;
+
+        ++validDepthLines;
+        float angle = std::atan2(line.endPointY - line.startPointY,
+                                 line.endPointX - line.startPointX);
+        if(angle < 0.0f) angle += static_cast<float>(CV_PI);
+        const int bin = std::min(3, static_cast<int>(4.0f * angle / static_cast<float>(CV_PI)));
+        ++orientationBins[bin];
+    }
+
+    int occupiedOrientationBins = 0;
+    for(int i = 0; i < 4; ++i)
+        if(orientationBins[i] > 0) ++occupiedOrientationBins;
+    const bool accepted = validDepthLines >= mnLineInitializationMinDepthLines &&
+                          occupiedOrientationBins >= 2;
+    if(!accepted)
+        return false;
+
+    if(lines) *lines = extractedLines;
+    if(descriptors) *descriptors = extractedDescriptors;
+    return true;
+}
+
 
 
 Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRectRight, const double &timestamp, string filename)
@@ -2815,8 +2908,17 @@ void Tracking::Track()
 
 void Tracking::StereoInitialization()
 {
-    if(mCurrentFrame.N>500)
+    vector<cv::line_descriptor::KeyLine> bootstrapLines;
+    cv::Mat bootstrapLineDescriptors;
+    const bool pointBootstrap = mCurrentFrame.N > 500;
+    const bool structuralBootstrap = !pointBootstrap &&
+        CanInitializeWithStructuralLines(&bootstrapLines, &bootstrapLineDescriptors);
+    if(pointBootstrap || structuralBootstrap)
     {
+        if(structuralBootstrap)
+            Verbose::PrintMess("RGB-D structural bootstrap with " +
+                               to_string(mCurrentFrame.N) + " ORB points and " +
+                               to_string(bootstrapLines.size()) + " LSD lines", Verbose::VERBOSITY_NORMAL);
         if (mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
         {
             if (!mCurrentFrame.mpImuPreintegrated || !mLastFrame.mpImuPreintegrated)
@@ -2852,6 +2954,8 @@ void Tracking::StereoInitialization()
 
         // Create KeyFrame
         KeyFrame* pKFini = new KeyFrame(mCurrentFrame,mpAtlas->GetCurrentMap(),mpKeyFrameDB);
+        if(structuralBootstrap && !bootstrapLineDescriptors.empty())
+            pKFini->SetLineFeatures(bootstrapLines, bootstrapLineDescriptors);
 
         // Insert KeyFrame in the map
         mpAtlas->AddKeyFrame(pKFini);
