@@ -57,6 +57,10 @@ DynamicFilter:
   sampsonEnabled: 1
   dynamicThreshold: 0.55
   yoloPrior: 0.70
+  # Benchmark mode: wait for the exact current-frame TensorRT result instead
+  # of silently treating a 10 ms scheduling timeout as an empty detection.
+  # This improves repeatability of the asynchronous frontend on crowd data.
+  resultWaitMs: 50
   planeDistance: 0.05
   dumpProbabilities: 0
   probabilityDumpPath: "/home/nan/workspace/orbslam3-yolov8/logs"
