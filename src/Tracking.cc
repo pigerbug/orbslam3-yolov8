@@ -1894,9 +1894,9 @@ void Tracking::ApplyInstanceMotionVerification()
 
 void Tracking::ExtractInstanceProbeFeatures(const cv::Mat &dynamicMask)
 {
-    mLastProbeKeys.swap(mvProbeKeys);
+    mvLastProbeKeys.swap(mvProbeKeys);
     mLastProbeDescriptors=mProbeDescriptors;
-    mLastProbeStates.swap(mvProbeStates);
+    mvLastProbeStates.swap(mvProbeStates);
     mvProbeKeys.clear();
     mProbeDescriptors.release();
     mvProbeStates.clear();
@@ -1923,21 +1923,21 @@ void Tracking::UpdateInstanceMotionStates()
     const Sophus::SE3f TwcLast=mLastFrame.GetPose().inverse();
     for(size_t s=0;s<mvProbeStates.size();++s) {
         int previous=-1; float best=0.f;
-        for(size_t p=0;p<mLastProbeStates.size();++p) {
-            const cv::Rect2f inter=mvProbeStates[s].rect & mLastProbeStates[p].rect;
-            const float uni=mvProbeStates[s].rect.area()+mLastProbeStates[p].rect.area()-inter.area();
+        for(size_t p=0;p<mvLastProbeStates.size();++p) {
+            const cv::Rect2f inter=mvProbeStates[s].rect & mvLastProbeStates[p].rect;
+            const float uni=mvProbeStates[s].rect.area()+mvLastProbeStates[p].rect.area()-inter.area();
             const float iou=uni>0.f ? inter.area()/uni : 0.f;
             if(iou>best) { best=iou; previous=static_cast<int>(p); }
         }
         if(previous<0 || best<0.15f) continue;
-        mvProbeStates[s].staticStreak=mLastProbeStates[previous].staticStreak;
-        mvProbeStates[s].dynamicStreak=mLastProbeStates[previous].dynamicStreak;
-        mvProbeStates[s].state=mLastProbeStates[previous].state;
+        mvProbeStates[s].staticStreak=mvLastProbeStates[previous].staticStreak;
+        mvProbeStates[s].dynamicStreak=mvLastProbeStates[previous].dynamicStreak;
+        mvProbeStates[s].state=mvLastProbeStates[previous].state;
         vector<float> residuals;
         for(size_t k=0;k<matches.size();++k) {
             if(matches[k].distance>48.f) continue;
             const cv::KeyPoint &a=mvLastProbeKeys[matches[k].queryIdx], &b=mvProbeKeys[matches[k].trainIdx];
-            if(!mLastProbeStates[previous].rect.contains(a.pt) || !mvProbeStates[s].rect.contains(b.pt)) continue;
+            if(!mvLastProbeStates[previous].rect.contains(a.pt) || !mvProbeStates[s].rect.contains(b.pt)) continue;
             const int ax=cvRound(a.pt.x), ay=cvRound(a.pt.y), bx=cvRound(b.pt.x), by=cvRound(b.pt.y);
             if(ax<0||ay<0||bx<0||by<0||ax>=mLastFrame.mImDepth.cols||ay>=mLastFrame.mImDepth.rows||bx>=mCurrentFrame.mImDepth.cols||by>=mCurrentFrame.mImDepth.rows) continue;
             const float za=mLastFrame.mImDepth.at<float>(ay,ax), zb=mCurrentFrame.mImDepth.at<float>(by,bx);
