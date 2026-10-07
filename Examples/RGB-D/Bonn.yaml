@@ -67,17 +67,17 @@ DynamicFilter:
   probabilityDumpPath: "/home/nan/workspace/orbslam3-yolov8/logs"
 
 DynamicRecovery:
-  # In crowd2, recover only pixels demonstrably behind the foreground depth
-  # layer. They are pose-only, remain blocked from new map observations, and
-  # complement the instance probe when people cover most of the image.
-  enabled: 1
-  minStaticMapMatches: 25
-  backgroundDepthGap: 0.20
+  # A close person has substantial depth variation across its own body; a
+  # box-level depth split would incorrectly re-admit moving body features.
+  # Keep this off for Bonn crowd sequences.
+  enabled: 0
+  minStaticMapMatches: 60
+  backgroundDepthGap: 0.15
   # Recovered box-interior background may assist only the current pose at a
   # reduced weight after static-map/depth validation; it is barred from new
   # landmark/keyframe observations.
-  poseProbability: 0.70
-  mapDepthResidual: 0.08
+  poseProbability: 0.45
+  mapDepthResidual: 0.10
 
 # YOLO classes are only candidate regions; the probe state machine determines
 # whether an instance is actually static or dynamic.
@@ -94,6 +94,9 @@ InstanceMotion:
   # consecutive supported frames and at least 12 current 3-D matches.
   releaseFrames: 6
   releaseMinMatches: 12
+  # Dense crowds may make several people move coherently with the camera.
+  # Do not promote any instance to normal MapPoints in such frames.
+  maxPromotionCoverage: 0.35
 
 # Pure RGB-D fallback for full or near-full occlusion.  Unknown coherent
 # motion is identified from disagreement with the pose predicted from the

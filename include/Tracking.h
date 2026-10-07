@@ -318,6 +318,8 @@ protected:
     float mInstanceMotionStaticProbability = 0.10f;
     int mnInstanceMotionReleaseFrames = 6;
     int mnInstanceMotionReleaseMinMatches = 12;
+    float mInstanceMotionMaxPromotionCoverage = 0.35f;
+    bool mbInstanceMotionPromotionAllowed = true;
     struct ProbeInstanceState {
         cv::Rect2f rect;
         int staticStreak = 0;

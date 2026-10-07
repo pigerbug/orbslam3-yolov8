@@ -127,6 +127,8 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             mnInstanceMotionReleaseFrames = std::max(3,static_cast<int>(instanceMotionNode["releaseFrames"]));
         if(!instanceMotionNode["releaseMinMatches"].empty())
             mnInstanceMotionReleaseMinMatches = std::max(4,static_cast<int>(instanceMotionNode["releaseMinMatches"]));
+        if(!instanceMotionNode["maxPromotionCoverage"].empty())
+            mInstanceMotionMaxPromotionCoverage = std::min(1.0f,std::max(0.0f,static_cast<float>(instanceMotionNode["maxPromotionCoverage"])));
     }
 
     cv::FileNode occlusionNode = dynamicSettings["OcclusionMode"];
@@ -1603,9 +1605,16 @@ void Tracking::PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImag
 {
     dynamicMask.release();
     staticMask.release();
+    mbInstanceMotionPromotionAllowed=true;
     mDynamicFilter.SubmitImage(frameId, detectionImage);
     const bool hasDetections = mDynamicFilter.WaitForDetections(frameId, detectionImage.size(),
                                                                  mDynamicFilter.ResultWaitMs(), dynamicMask, boxes);
+    if(hasDetections && mbInstanceMotionEnabled && !dynamicMask.empty())
+    {
+        const float coverage=static_cast<float>(cv::countNonZero(dynamicMask)) /
+                             static_cast<float>(std::max(1,dynamicMask.rows*dynamicMask.cols));
+        mbInstanceMotionPromotionAllowed=coverage<=mInstanceMotionMaxPromotionCoverage;
+    }
     if(hasDetections && mDynamicFilter.UseHardMask())
     {
         cv::Mat mask=dynamicMask.clone();
@@ -1614,7 +1623,7 @@ void Tracking::PrepareDynamicMask(uint64_t frameId, const cv::Mat &detectionImag
         // three consecutive static decisions.  A strong-motion decision
         // changes the state before the following image reaches this point,
         // so the box is hard-masked again immediately on the next frame.
-        if(mbInstanceMotionEnabled)
+        if(mbInstanceMotionEnabled && mbInstanceMotionPromotionAllowed)
             for(size_t i=0;i<boxes.size();++i)
                 for(size_t j=0;j<mvProbeStates.size();++j)
                     if(mvProbeStates[j].state==1 &&
@@ -2037,7 +2046,7 @@ void Tracking::UpdateInstanceMotionStates()
 
 void Tracking::ApplyStaticProbeAssist()
 {
-    if(!mbInstanceMotionEnabled) return;
+    if(!mbInstanceMotionEnabled || !mbInstanceMotionPromotionAllowed) return;
     for(size_t b=0;b<mCurrentFrame.mvDynamicBoxes.size();++b) {
         bool stable=false;
         for(size_t j=0;j<mvProbeStates.size();++j)
