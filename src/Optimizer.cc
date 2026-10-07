@@ -1185,7 +1185,9 @@ int Optimizer::PoseOptimization(Frame *pFrame)
         Eigen::Matrix<double,2,1> obs;
         obs << pFrame->mvProbeObservations[i].pt.x,pFrame->mvProbeObservations[i].pt.y;
         e->setMeasurement(obs);
-        e->setInformation(Eigen::Matrix2d::Identity()*0.1);
+        const double probeWeight=i<pFrame->mvProbeWeights.size() ?
+            std::max(0.05f,std::min(1.0f,pFrame->mvProbeWeights[i])) : 0.1;
+        e->setInformation(Eigen::Matrix2d::Identity()*probeWeight);
         g2o::RobustKernelHuber *rk=new g2o::RobustKernelHuber;
         e->setRobustKernel(rk); rk->setDelta(deltaMono);
         e->pCamera=pFrame->mpCamera;
@@ -1200,6 +1202,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
     {
         pFrame->mvProbeWorldPoints.clear();
         pFrame->mvProbeObservations.clear();
+        pFrame->mvProbeWeights.clear();
         pFrame->mvProbeInstanceIds.clear();
         return 0;
     }
@@ -1340,6 +1343,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
     // evidence, and Frame copies would carry them into the next image.
     pFrame->mvProbeWorldPoints.clear();
     pFrame->mvProbeObservations.clear();
+    pFrame->mvProbeWeights.clear();
     pFrame->mvProbeInstanceIds.clear();
 
     return nInitialCorrespondences-nBad;

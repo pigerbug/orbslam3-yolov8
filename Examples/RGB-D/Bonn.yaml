@@ -98,6 +98,16 @@ InstanceMotion:
   # Do not promote any instance to normal MapPoints in such frames.
   maxPromotionCoverage: 0.35
 
+# Recover existing, well-observed static MapPoints only when their projected
+# depth and a box-internal probe both agree with the current RGB-D image.
+# These are temporary pose constraints, never new observations or landmarks.
+TrustedMapRecovery:
+  enabled: 1
+  minStaticMatches: 20
+  maxConstraints: 20
+  reprojectionResidual: 3.0
+  depthResidual: 0.03
+
 # Pure RGB-D fallback for full or near-full occlusion.  Unknown coherent
 # motion is identified from disagreement with the pose predicted from the
 # existing static map; map growth is frozen until static support returns.

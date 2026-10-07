@@ -233,6 +233,7 @@ protected:
     void UpdateInstanceMotionStates();
     void ApplyStaticProbeAssist();
     void BuildTemporaryProbeConstraints();
+    void BuildTrustedMapPointRecovery();
     void ApplyPersistentManhattanImmunity();
     void ApplyGroundShadowProbability();
     void DumpDynamicProbabilityStats();
@@ -320,6 +321,11 @@ protected:
     int mnInstanceMotionReleaseMinMatches = 12;
     float mInstanceMotionMaxPromotionCoverage = 0.35f;
     bool mbInstanceMotionPromotionAllowed = true;
+    bool mbTrustedMapRecoveryEnabled = true;
+    int mnTrustedMapRecoveryMinStaticMatches = 20;
+    int mnTrustedMapRecoveryMaxConstraints = 20;
+    float mTrustedMapRecoveryReprojection = 3.0f;
+    float mTrustedMapRecoveryDepthResidual = 0.03f;
     struct ProbeInstanceState {
         cv::Rect2f rect;
         int staticStreak = 0;

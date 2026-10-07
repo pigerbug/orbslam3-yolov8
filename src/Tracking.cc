@@ -131,6 +131,20 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             mInstanceMotionMaxPromotionCoverage = std::min(1.0f,std::max(0.0f,static_cast<float>(instanceMotionNode["maxPromotionCoverage"])));
     }
 
+    cv::FileNode trustedMapRecoveryNode = dynamicSettings["TrustedMapRecovery"];
+    if(!trustedMapRecoveryNode.empty())
+    {
+        if(!trustedMapRecoveryNode["enabled"].empty()) mbTrustedMapRecoveryEnabled = static_cast<int>(trustedMapRecoveryNode["enabled"]) != 0;
+        if(!trustedMapRecoveryNode["minStaticMatches"].empty())
+            mnTrustedMapRecoveryMinStaticMatches = std::max(3,static_cast<int>(trustedMapRecoveryNode["minStaticMatches"]));
+        if(!trustedMapRecoveryNode["maxConstraints"].empty())
+            mnTrustedMapRecoveryMaxConstraints = std::max(1,static_cast<int>(trustedMapRecoveryNode["maxConstraints"]));
+        if(!trustedMapRecoveryNode["reprojectionResidual"].empty())
+            mTrustedMapRecoveryReprojection = std::max(0.5f,static_cast<float>(trustedMapRecoveryNode["reprojectionResidual"]));
+        if(!trustedMapRecoveryNode["depthResidual"].empty())
+            mTrustedMapRecoveryDepthResidual = std::max(0.005f,static_cast<float>(trustedMapRecoveryNode["depthResidual"]));
+    }
+
     cv::FileNode occlusionNode = dynamicSettings["OcclusionMode"];
     if(!occlusionNode.empty())
     {
@@ -2077,6 +2091,7 @@ void Tracking::BuildTemporaryProbeConstraints()
 {
     mCurrentFrame.mvProbeWorldPoints.clear();
     mCurrentFrame.mvProbeObservations.clear();
+    mCurrentFrame.mvProbeWeights.clear();
     mCurrentFrame.mvProbeInstanceIds.clear();
     if(!mCurrentFrame.HasPose() || CountCurrentStaticMapMatches()>=20 || mvProbeLandmarks.empty() || mProbeDescriptors.empty()) return;
     for(size_t i=0;i<mvProbeLandmarks.size();++i) --mvProbeLandmarks[i].ttl;
@@ -2117,8 +2132,100 @@ void Tracking::BuildTemporaryProbeConstraints()
         if(z<=0.f || std::fabs(z-pc.z())>0.03f) continue;
         mCurrentFrame.mvProbeWorldPoints.push_back(landmark.world);
         mCurrentFrame.mvProbeObservations.push_back(kp);
+        mCurrentFrame.mvProbeWeights.push_back(0.10f);
         mCurrentFrame.mvProbeInstanceIds.push_back(landmark.instanceId);
     }
+}
+
+void Tracking::BuildTrustedMapPointRecovery()
+{
+    // This recovery has intentionally no side effects on Frame::mvpMapPoints:
+    // a point seen through a semantic box can help this pose only, never map
+    // growth, keyframe observations, or bundle adjustment.
+    if(!mbTrustedMapRecoveryEnabled || !mCurrentFrame.HasPose() ||
+       CountCurrentStaticMapMatches()>=mnTrustedMapRecoveryMinStaticMatches ||
+       mvpLocalMapPoints.empty() || mvProbeKeys.empty() || mProbeDescriptors.empty() ||
+       mCurrentFrame.mImDepth.empty() || !mCurrentFrame.mpCamera)
+        return;
+
+    const Sophus::SE3f Tcw=mCurrentFrame.GetPose();
+    const cv::Rect imageBounds(0,0,mCurrentFrame.mImDepth.cols,mCurrentFrame.mImDepth.rows);
+    std::vector<MapPoint*> candidates;
+    std::vector<int> candidateBoxes;
+    cv::Mat candidateDescriptors;
+    std::set<MapPoint*> seen;
+
+    for(size_t i=0;i<mvpLocalMapPoints.size();++i)
+    {
+        MapPoint *point=mvpLocalMapPoints[i];
+        if(!point || point->isBad() || point->Observations()<2 || !seen.insert(point).second)
+            continue;
+        const Eigen::Vector3f pointCamera=Tcw*point->GetWorldPos();
+        if(pointCamera.z()<=0.f) continue;
+        const Eigen::Vector2f projected=mCurrentFrame.mpCamera->project(pointCamera);
+        const cv::Point2f pixel(projected.x(),projected.y());
+        const int x=cvRound(pixel.x), y=cvRound(pixel.y);
+        if(!imageBounds.contains(cv::Point(x,y))) continue;
+
+        int boxId=-1;
+        for(size_t b=0;b<mCurrentFrame.mvDynamicBoxes.size();++b)
+            if(mCurrentFrame.mvDynamicBoxes[b].rect.contains(pixel)) { boxId=static_cast<int>(b); break; }
+        if(boxId<0) continue;
+
+        // A person in front of a wall has a nearer depth at this pixel.  Only
+        // retain map points that are actually visible at the predicted depth.
+        const float imageDepth=mCurrentFrame.mImDepth.at<float>(y,x);
+        if(!std::isfinite(imageDepth) || imageDepth<=0.f ||
+           std::fabs(imageDepth-pointCamera.z())>mTrustedMapRecoveryDepthResidual)
+            continue;
+        const cv::Mat descriptor=point->GetDescriptor();
+        if(descriptor.empty()) continue;
+        candidateDescriptors.push_back(descriptor);
+        candidates.push_back(point);
+        candidateBoxes.push_back(boxId);
+    }
+
+    if(candidateDescriptors.empty()) return;
+    cv::BFMatcher matcher(cv::NORM_HAMMING,false);
+    std::vector<std::vector<cv::DMatch> > nearest;
+    matcher.knnMatch(candidateDescriptors,mProbeDescriptors,nearest,2);
+    std::set<int> usedProbeFeatures;
+    const size_t constraintsBefore=mCurrentFrame.mvProbeWorldPoints.size();
+    const size_t maximum=std::min(static_cast<size_t>(mnTrustedMapRecoveryMaxConstraints),static_cast<size_t>(20));
+    for(size_t i=0;i<nearest.size() && mCurrentFrame.mvProbeWorldPoints.size()<maximum;++i)
+    {
+        if(nearest[i].size()<2 || nearest[i][0].distance>40.f ||
+           nearest[i][0].distance>=0.75f*nearest[i][1].distance)
+            continue;
+        const int probeIndex=nearest[i][0].trainIdx;
+        if(probeIndex<0 || probeIndex>=static_cast<int>(mvProbeKeys.size()) ||
+           !usedProbeFeatures.insert(probeIndex).second)
+            continue;
+        const cv::KeyPoint &observation=mvProbeKeys[probeIndex];
+        if(!mCurrentFrame.mvDynamicBoxes[candidateBoxes[i]].rect.contains(observation.pt))
+            continue;
+        const Eigen::Vector3f pointCamera=Tcw*candidates[i]->GetWorldPos();
+        const Eigen::Vector2f projected=mCurrentFrame.mpCamera->project(pointCamera);
+        if(cv::norm(cv::Point2f(projected.x(),projected.y())-observation.pt)>mTrustedMapRecoveryReprojection)
+            continue;
+        const int x=cvRound(observation.pt.x), y=cvRound(observation.pt.y);
+        if(!imageBounds.contains(cv::Point(x,y))) continue;
+        const float observedDepth=mCurrentFrame.mImDepth.at<float>(y,x);
+        if(!std::isfinite(observedDepth) || observedDepth<=0.f ||
+           std::fabs(observedDepth-pointCamera.z())>mTrustedMapRecoveryDepthResidual)
+            continue;
+
+        mCurrentFrame.mvProbeWorldPoints.push_back(candidates[i]->GetWorldPos());
+        mCurrentFrame.mvProbeObservations.push_back(observation);
+        mCurrentFrame.mvProbeWeights.push_back(0.25f);
+        // Negative ids are reserved for ephemeral groups.  Each box is
+        // rejected as a whole if any member becomes an optimizer outlier.
+        mCurrentFrame.mvProbeInstanceIds.push_back(-1000-candidateBoxes[i]);
+    }
+    if(mCurrentFrame.mvProbeWorldPoints.size()>constraintsBefore)
+        cout << "Trusted map recovery: "
+             << (mCurrentFrame.mvProbeWorldPoints.size()-constraintsBefore)
+             << " box-interior static constraints" << endl;
 }
 
 void Tracking::ApplyPersistentManhattanImmunity()
@@ -4301,6 +4408,7 @@ bool Tracking::TrackLocalMap()
     ValidateRecoveredBackgroundMatches();
     RejectDynamicMapPointObservations();
     BuildTemporaryProbeConstraints();
+    BuildTrustedMapPointRecovery();
     int inliers;
     if (!mpAtlas->isImuInitialized())
         Optimizer::PoseOptimization(&mCurrentFrame);

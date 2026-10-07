@@ -245,6 +245,8 @@ public:
     // MapPoints: Tracking may use them for this frame's pose only.
     std::vector<Eigen::Vector3f> mvProbeWorldPoints;
     std::vector<cv::KeyPoint> mvProbeObservations;
+    // Per-observation information scale for ephemeral probe constraints.
+    std::vector<float> mvProbeWeights;
     // Used only to reject an ephemeral probe instance as a whole during
     // pose optimization.  Probe observations never become map observations.
     std::vector<int> mvProbeInstanceIds;
