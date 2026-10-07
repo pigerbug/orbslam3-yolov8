@@ -90,20 +90,21 @@ InstanceMotion:
   reprojectionResidual: 5.0
   depthResidual: 0.10
   staticProbability: 0.10
-  # Full main-front-end/map release is stricter than Probe-Static: six
-  # consecutive supported frames and at least 12 current 3-D matches.
-  releaseFrames: 6
-  releaseMinMatches: 12
-  # Dense crowds may make several people move coherently with the camera.
-  # Do not promote any instance to normal MapPoints in such frames.
-  maxPromotionCoverage: 0.35
+  # person_tracking2 profile: a single close person can cover more than one
+  # third of the image, while the static vehicles/background need to recover
+  # promptly after the person leaves.
+  releaseFrames: 4
+  releaseMinMatches: 8
+  # Keep crowd2 at 0.35.  The single-person sequence uses 0.55 so normal
+  # mapping is not frozen merely because one close person occupies the view.
+  maxPromotionCoverage: 0.55
 
 # Recover existing, well-observed static MapPoints only when their projected
 # depth and a box-internal probe both agree with the current RGB-D image.
 # These are temporary pose constraints, never new observations or landmarks.
 TrustedMapRecovery:
   enabled: 1
-  minStaticMatches: 20
+  minStaticMatches: 15
   maxConstraints: 20
   reprojectionResidual: 3.0
   depthResidual: 0.03
@@ -132,9 +133,11 @@ OcclusionMode:
 # map growth from the brief crowd-induced wrong-association branches.
 PoseGuard:
   enabled: 1
-  maxTranslation: 0.06
-  maxRotationDeg: 12.0
-  minStaticInliers: 45
+  # A close moving person leaves fewer background matches; retain the guard
+  # but do not reject normal RGB-D motion solely for having <45 inliers.
+  maxTranslation: 0.10
+  maxRotationDeg: 18.0
+  minStaticInliers: 25
 
 GroundShadow:
   enabled: 1
