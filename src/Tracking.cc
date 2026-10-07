@@ -4512,6 +4512,16 @@ bool Tracking::TrackLocalMap()
 
 bool Tracking::NeedNewKeyFrame()
 {
+    // In a dense crowd, even a pose that passes the short-term matcher can
+    // be supported by a tiny, unstable visible background.  Do not let that
+    // frame create a keyframe or new RGB-D landmarks: local mapping would
+    // otherwise make a one-frame mistake persistent and branch the map.
+    if(mbInstanceMotionEnabled && !mbInstanceMotionPromotionAllowed)
+    {
+        Verbose::PrintMess("Dense dynamic coverage: keyframe insertion frozen", Verbose::VERBOSITY_NORMAL);
+        return false;
+    }
+
     if((mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD) && !mpAtlas->GetCurrentMap()->isImuInitialized())
     {
         if (mSensor == System::IMU_MONOCULAR && (mCurrentFrame.mTimeStamp-mpLastKeyFrame->mTimeStamp)>=0.25)
