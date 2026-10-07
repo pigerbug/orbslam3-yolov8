@@ -67,17 +67,17 @@ DynamicFilter:
   probabilityDumpPath: "/home/nan/workspace/orbslam3-yolov8/logs"
 
 DynamicRecovery:
-  # This broad background-recovery path is intentionally off while the
-  # instance probe is enabled: recovery is restricted to the temporary,
-  # low-weight constraints defined in code below.
-  enabled: 0
-  minStaticMapMatches: 60
-  backgroundDepthGap: 0.15
+  # In crowd2, recover only pixels demonstrably behind the foreground depth
+  # layer. They are pose-only, remain blocked from new map observations, and
+  # complement the instance probe when people cover most of the image.
+  enabled: 1
+  minStaticMapMatches: 25
+  backgroundDepthGap: 0.20
   # Recovered box-interior background may assist only the current pose at a
   # reduced weight after static-map/depth validation; it is barred from new
   # landmark/keyframe observations.
-  poseProbability: 0.45
-  mapDepthResidual: 0.10
+  poseProbability: 0.70
+  mapDepthResidual: 0.08
 
 # YOLO classes are only candidate regions; the probe state machine determines
 # whether an instance is actually static or dynamic.
@@ -99,7 +99,11 @@ InstanceMotion:
 # motion is identified from disagreement with the pose predicted from the
 # existing static map; map growth is frozen until static support returns.
 OcclusionMode:
-  enabled: 1
+  # Crowd2 repeatedly satisfies the semantic-coverage trigger although the
+  # camera is still moving.  Holding the predicted pose for up to ten frames
+  # creates large saw-tooth ATE errors; keep this experimental fallback off
+  # for the Bonn benchmarks.
+  enabled: 0
   minStaticMatches: 20
   minUnknownMatches: 20
   unknownFraction: 0.60

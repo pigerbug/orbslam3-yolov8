@@ -1645,7 +1645,7 @@ void Tracking::RecoverDepthBackgroundInDynamicMask(cv::Mat &dynamicMask, cv::Mat
                                                     const std::vector<YoloBoundingBox> &boxes)
 {
     recoveredBackgroundMask.release();
-    if(!mbDepthRecoveryEnabled || !mDynamicFilter.UseHardMask() || mbInstanceMotionEnabled || dynamicMask.empty() ||
+    if(!mbDepthRecoveryEnabled || !mDynamicFilter.UseHardMask() || dynamicMask.empty() ||
        depth.empty() || depth.type()!=CV_32F || boxes.empty())
         return;
 
@@ -2699,9 +2699,11 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
     std::vector<YoloBoundingBox> dynamicBoxes;
     PrepareDynamicMask(++mnDynamicInputFrameId,imRGB,dynamicMask,staticMask,dynamicBoxes);
     RecoverDepthBackgroundInDynamicMask(dynamicMask,recoveredBackgroundMask,imDepth,dynamicBoxes);
-    // PrepareDynamicMask may have selectively released a verified Static
-    // instance.  Do not overwrite that mask here.
-    if(mDynamicFilter.UseHardMask() && !mbInstanceMotionEnabled && !dynamicMask.empty())
+    // Add only depth-confirmed background pixels to the mask prepared above.
+    // bitwise_or preserves any separately verified Static instance release.
+    if(!recoveredBackgroundMask.empty())
+        cv::bitwise_or(staticMask,recoveredBackgroundMask,staticMask);
+    else if(mDynamicFilter.UseHardMask() && !mbInstanceMotionEnabled && !dynamicMask.empty())
         cv::bitwise_not(dynamicMask,staticMask);
 
     if (mSensor == System::RGBD)
