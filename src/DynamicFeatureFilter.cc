@@ -239,8 +239,15 @@ bool DynamicFeatureFilter::WaitForDetections(uint64_t frameId, const cv::Size &i
                                              cv::Mat &mask, std::vector<YoloBoundingBox> &boxes) const
 {
     std::unique_lock<std::mutex> lock(mMutex);
-    const std::chrono::milliseconds timeout(std::max(0, timeoutMs));
-    mCondition.wait_for(lock, timeout, [this, frameId] { return mLatestFrameId >= frameId || mbStopWorker; });
+    const auto ready=[this, frameId] { return mLatestFrameId >= frameId || mbStopWorker; };
+    // Benchmark mode: a negative timeout means wait for the exact submitted
+    // frame.  The previous zero/finite timeout fallback silently treated a
+    // late TensorRT result as an empty detection, making trajectory quality
+    // depend on host scheduling rather than the input sequence.
+    if(timeoutMs<0)
+        mCondition.wait(lock, ready);
+    else
+        mCondition.wait_for(lock, std::chrono::milliseconds(timeoutMs), ready);
     if(mLatestFrameId != frameId || mLatestMask.empty() || mLatestMask.size() != imageSize)
         return false;
     mask = mLatestMask.clone();
